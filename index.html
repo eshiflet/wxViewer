@@ -509,7 +509,7 @@
     </span>
   </label>
   <input type="file" id="file-input" accept=".csv" multiple>
-  <button class="btn secondary" id="auto-load-btn" title="Auto-fetch all CSVs from this server">⚡ Auto-load</button>
+  <button class="btn secondary" id="auto-load-btn" title="Pick a folder of CSV files — remembered for next visit">📂 Open Folder</button>
   <span id="file-status">No files loaded</span>
 
   <div class="divider"></div>
@@ -1613,41 +1613,115 @@ function renderChartAndAnalysis() {
   if (analysisPanel.classList.contains('visible')) renderActiveView();
 }
 
-// ── Auto-load from server ─────────────────────────────────────────────────
+// ── Folder-based auto-load (File System Access API + IndexedDB persistence) ──
+const DIR_HANDLE_DB  = 'wxviewer-dir-handle';
+const DIR_HANDLE_KEY = 'dirHandle';
+
+async function getStoredDirHandle() {
+  return new Promise(resolve => {
+    const req = indexedDB.open(DIR_HANDLE_DB, 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('handles');
+    req.onsuccess = e => {
+      const db = e.target.result;
+      const tx = db.transaction('handles', 'readonly');
+      const get = tx.objectStore('handles').get(DIR_HANDLE_KEY);
+      get.onsuccess = () => resolve(get.result || null);
+      get.onerror   = () => resolve(null);
+    };
+    req.onerror = () => resolve(null);
+  });
+}
+
+async function storeDirHandle(handle) {
+  return new Promise(resolve => {
+    const req = indexedDB.open(DIR_HANDLE_DB, 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('handles');
+    req.onsuccess = e => {
+      const db = e.target.result;
+      const tx = db.transaction('handles', 'readwrite');
+      tx.objectStore('handles').put(handle, DIR_HANDLE_KEY);
+      tx.oncomplete = resolve;
+      tx.onerror    = resolve;
+    };
+    req.onerror = resolve;
+  });
+}
+
+async function loadFromDirHandle(dirHandle) {
+  const allParsed = []; let cols = null; let count = 0;
+  for await (const entry of dirHandle.values()) {
+    if (entry.kind !== 'file' || !entry.name.toLowerCase().endsWith('.csv')) continue;
+    count++;
+    showLoading(true, `Loading ${entry.name}…`);
+    const file = await entry.getFile();
+    const text = await file.text();
+    const { headers, rows } = parseCSV(text);
+    if (!cols) cols = headers;
+    allParsed.push(...rows);
+  }
+  if (!count) { fileStatus.textContent = 'No CSV files found in that folder'; return; }
+  allParsed.sort((a, b) => a.ts - b.ts);
+  allRows = allParsed; columns = cols || [];
+  fileStatus.textContent = `${count} files · ${allRows.length.toLocaleString()} readings`;
+  if (allRows.length) {
+    const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
+    dateFrom = first; dateTo = last;
+    dateFromEl.value = toDateInput(first);
+    dateToEl.value   = toDateInput(last);
+    dataRangeLabel.textContent = `${fmtDate(first)} – ${fmtDate(last)}`;
+  }
+  buildSidebar();
+  showLoading(false);
+  renderChart();
+}
+
 document.getElementById('auto-load-btn').addEventListener('click', async () => {
-  showLoading(true, 'Fetching CSV list…');
+  if (!window.showDirectoryPicker) {
+    fileStatus.textContent = 'Directory picker not supported in this browser — use "Load CSV files" instead';
+    return;
+  }
+  showLoading(true, 'Waiting for folder selection…');
   await sleep(0);
   try {
-    const links = await fetch('/api/files').then(r => r.json());
-    if (!links.length) { showLoading(false); fileStatus.textContent = 'No CSVs found on server'; return; }
-
-    const allParsed = []; let cols = null;
-    for (const link of links) {
-      showLoading(true, `Loading ${link}…`);
-      const text = await fetch(link).then(r => r.text());
-      const { headers, rows } = parseCSV(text);
-      if (!cols) cols = headers;
-      allParsed.push(...rows);
+    // Try to reuse a stored handle first; if permission denied, show picker
+    let dirHandle = await getStoredDirHandle();
+    if (dirHandle) {
+      const perm = await dirHandle.queryPermission({ mode: 'read' });
+      if (perm !== 'granted') {
+        const req = await dirHandle.requestPermission({ mode: 'read' });
+        if (req !== 'granted') dirHandle = null;
+      }
     }
-    allParsed.sort((a, b) => a.ts - b.ts);
-    allRows = allParsed; columns = cols || [];
-    fileStatus.textContent = `${links.length} files · ${allRows.length.toLocaleString()} readings`;
-
-    if (allRows.length) {
-      const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
-      dateFrom = first; dateTo = last;
-      dateFromEl.value = toDateInput(first);
-      dateToEl.value   = toDateInput(last);
-      dataRangeLabel.textContent = `${fmtDate(first)} – ${fmtDate(last)}`;
+    if (!dirHandle) {
+      dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+      await storeDirHandle(dirHandle);
     }
-    buildSidebar();
-    showLoading(false);
-    renderChart();
+    await loadFromDirHandle(dirHandle);
   } catch (e) {
     showLoading(false);
-    fileStatus.textContent = `Error: ${e.message}`;
+    if (e.name !== 'AbortError') fileStatus.textContent = `Error: ${e.message}`;
+    else fileStatus.textContent = 'Folder selection cancelled';
   }
 });
+
+// On page load, auto-reload from the stored folder handle if permission is already granted
+(async () => {
+  if (!window.showDirectoryPicker) return;
+  const dirHandle = await getStoredDirHandle();
+  if (!dirHandle) return;
+  const perm = await dirHandle.queryPermission({ mode: 'read' });
+  if (perm === 'granted') {
+    showLoading(true, 'Reloading from saved folder…');
+    await sleep(0);
+    try { await loadFromDirHandle(dirHandle); }
+    catch { showLoading(false); }
+  } else {
+    // Permission needs re-grant — update button to signal this
+    const btn = document.getElementById('auto-load-btn');
+    btn.textContent = '📂 Reload Folder';
+    btn.title = 'Click to re-open your previously selected CSV folder';
+  }
+})();
 
 // ── Thermal analysis ──────────────────────────────────────────────────────
 // Model: house as an RC thermal circuit.
