@@ -1,0 +1,14 @@
+# Weather data files (personal data, not part of the app)
+*.csv
+
+# Alexa poller credentials and database
+alexa-poller/config.json
+alexa-poller/hvac_data.db
+alexa-poller/poller.log
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

@@ -1,0 +1,2086 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weather Station</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #222638;
+    --border: #2e3245;
+    --accent: #4f8ef7;
+    --text: #e2e6f0;
+    --muted: #7b82a0;
+    --radius: 8px;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 17px; font-weight: 600; letter-spacing: -0.3px; }
+  header span { color: var(--muted); font-size: 12px; margin-left: auto; }
+
+  /* ── Toolbar rows ─────────────────────────────────────────── */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    flex-shrink: 0;
+  }
+  .toolbar label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .divider { width: 1px; height: 22px; background: var(--border); flex-shrink: 0; }
+
+  input[type="date"], input[type="number"], input[type="text"] {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    padding: 5px 9px;
+    font-size: 12px;
+  }
+  input[type="date"] { cursor: pointer; }
+  input[type="number"] { width: 80px; }
+  input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+
+  .btn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    padding: 6px 13px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn.secondary {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn.active {
+    background: #f59e0b;
+    color: #000;
+    border: none;
+  }
+  .btn.icon-btn {
+    padding: 5px 9px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .file-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 13px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    color: var(--text);
+  }
+  .file-label:hover { border-color: var(--accent); }
+  #file-input { display: none; }
+  #file-status { font-size: 11px; color: var(--muted); }
+
+  /* ── Forecast toolbar ─────────────────────────────────────── */
+  .forecast-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-wrap: wrap;
+    flex-shrink: 0;
+  }
+  .forecast-bar label { font-size: 12px; color: var(--muted); }
+
+  .model-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--muted);
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .model-btn:hover { color: var(--text); }
+  .model-btn.active { color: var(--text); }
+  .model-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+  .loc-fields { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  .loc-fields span { font-size: 11px; color: var(--muted); }
+
+  #forecast-status { font-size: 11px; color: var(--muted); }
+
+  /* ── Main layout ──────────────────────────────────────────── */
+  .main { display: flex; flex: 1; overflow: hidden; }
+
+  .sidebar {
+    width: 230px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .sidebar-section-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--muted);
+    padding: 0 4px;
+    margin-bottom: 4px;
+  }
+
+  .sidebar-actions { display: flex; gap: 5px; }
+  .sidebar-actions button {
+    flex: 1;
+    font-size: 11px;
+    padding: 3px 6px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .sidebar-actions button:hover { color: var(--text); }
+
+  .series-list { display: flex; flex-direction: column; gap: 1px; }
+
+  .series-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 5px;
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .series-item:hover { background: var(--surface); }
+  .series-item input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+  .series-swatch { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .series-name { font-size: 11px; line-height: 1.3; flex: 1; min-width: 0; }
+
+  /* ── Chart area ───────────────────────────────────────────── */
+  .chart-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+  #chart { flex: 1; width: 100%; }
+
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    gap: 10px;
+    color: var(--muted);
+    text-align: center;
+    padding: 40px;
+  }
+  .empty-state svg { opacity: 0.25; }
+  .empty-state p { font-size: 14px; }
+  .empty-state small { font-size: 12px; opacity: 0.7; }
+
+  /* ── Anomaly badge ────────────────────────────────────────── */
+  #anomaly-count {
+    display: none;
+    background: #f59e0b;
+    color: #000;
+    border-radius: 10px;
+    padding: 1px 7px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  /* ── Loading overlay ──────────────────────────────────────── */
+  .loading {
+    position: absolute;
+    inset: 0;
+    background: rgba(15,17,23,0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    color: var(--muted);
+    z-index: 10;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner {
+    width: 18px; height: 18px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    margin-right: 8px;
+  }
+
+  /* ── Tooltip ──────────────────────────────────────────────── */
+  .anomaly-legend {
+    position: absolute;
+    top: 8px; right: 10px;
+    background: var(--surface);
+    border: 1px solid #f59e0b44;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 11px;
+    color: var(--text);
+    display: none;
+    z-index: 5;
+    max-width: 220px;
+    pointer-events: none;
+  }
+  .anomaly-legend.visible { display: block; }
+  .anomaly-legend b { color: #f59e0b; }
+
+  /* ── Stats bar ────────────────────────────────────────────── */
+  #stats-bar {
+    flex-shrink: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1px;
+    border-top: 1px solid var(--border);
+    background: var(--border);
+  }
+  .stat-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 12px;
+    background: var(--surface);
+    font-size: 11px;
+    flex: 1;
+    min-width: 160px;
+  }
+  .stat-swatch { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .stat-label { color: var(--muted); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stat-values { display: flex; gap: 12px; flex-shrink: 0; }
+  .stat-values span { color: var(--muted); font-size: 10px; }
+  .stat-values b { color: var(--text); }
+
+  /* ── Analysis panel ───────────────────────────────────────── */
+  .analysis-panel {
+    flex-shrink: 0;
+    border-top: 2px solid var(--accent);
+    background: var(--bg);
+    display: none;
+    flex-direction: column;
+    height: 55vh;
+    min-height: 400px;
+  }
+  .analysis-panel.visible { display: flex; }
+
+  .analysis-tabs {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 0 16px;
+    flex-shrink: 0;
+  }
+  .analysis-tab {
+    padding: 10px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -1px;
+    white-space: nowrap;
+    transition: color 0.15s;
+  }
+  .analysis-tab:hover { color: var(--text); background: #ffffff08; }
+  .analysis-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .analysis-tab-spacer { flex: 1; }
+  .close-analysis {
+    font-size: 18px;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 4px 8px;
+    line-height: 1;
+  }
+  .close-analysis:hover { color: var(--text); }
+
+  .analysis-content {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+  }
+  .analysis-view { flex: 1; display: none; }
+  .analysis-view.active { display: flex; }
+
+  /* Records table */
+  .records-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 16px;
+  }
+  .records-grid {
+    display: grid;
+    grid-template-columns: 1fr repeat(4, auto);
+    gap: 1px;
+    font-size: 11px;
+    background: var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .rg-head {
+    background: var(--surface2);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 5px 10px;
+  }
+  .rg-cell {
+    background: var(--surface);
+    padding: 5px 10px;
+    white-space: nowrap;
+  }
+  .rg-cell.name { color: var(--text); }
+  .rg-cell.hi { color: #f97316; font-weight: 600; }
+  .rg-cell.lo { color: #60a5fa; font-weight: 600; }
+  .rg-cell.date { color: var(--muted); font-size: 10px; }
+
+  /* ── Scatter info tooltip ────────────────────────────────── */
+  .scatter-info-icon {
+    position: relative; cursor: help;
+    color: var(--muted); font-size: 13px; font-style: normal;
+    width: 18px; height: 18px; display: flex; align-items: center; justify-content: center;
+    border-radius: 50%; border: 1px solid var(--border); flex-shrink: 0;
+    font-family: serif;
+  }
+  .scatter-info-icon:hover, .scatter-info-icon:focus { color: var(--accent); border-color: var(--accent); outline: none; }
+  .scatter-tooltip {
+    display: none;
+    position: absolute; right: 0; top: 22px; z-index: 100;
+    background: #1a1d2e; border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; width: 320px; font-size: 11px; line-height: 1.7;
+    color: var(--text); box-shadow: 0 8px 24px #00000088;
+    pointer-events: none;
+  }
+  .scatter-info-icon:hover .scatter-tooltip,
+  .scatter-info-icon:focus .scatter-tooltip { display: block; }
+
+  /* ── Interpretation cards ────────────────────────────────── */
+  .interp-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px 14px; font-size: 11px;
+    min-width: 220px; max-width: 340px; flex: 1;
+    line-height: 1.75;
+  }
+  .interp-card-title { font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 8px; color: var(--muted); }
+  .interp-card ul { margin: 0; padding-left: 14px; }
+  .interp-card li { margin-bottom: 2px; }
+  .interp-card b { color: var(--text); }
+  .interp-card .hi { color: #f97316; font-weight: 600; }
+  .interp-card .lo { color: #38bdf8; font-weight: 600; }
+  .interp-card .good { color: #a3e635; font-weight: 600; }
+  .interp-card .warn { color: #facc15; font-weight: 600; }
+
+  /* ── Season config ───────────────────────────────────────── */
+  .season-config {
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .season-config-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 16px; cursor: pointer; user-select: none;
+    font-size: 12px; font-weight: 600; color: var(--muted);
+  }
+  .season-config-header:hover { color: var(--text); }
+  .season-config-header .caret { transition: transform 0.2s; font-size: 10px; }
+  .season-config-header.open .caret { transform: rotate(90deg); }
+  .season-config-body {
+    display: none; padding: 0 16px 12px;
+    gap: 24px; flex-wrap: wrap;
+  }
+  .season-config-body.open { display: flex; }
+  .season-group { flex: 1; min-width: 220px; }
+  .season-group-title {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 8px;
+  }
+  .season-group-title.heat { color: #f97316; }
+  .season-group-title.cool { color: #38bdf8; }
+  .season-group-title.passive { color: #a3e635; }
+  .season-ranges { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+  .season-range-row {
+    display: flex; align-items: center; gap: 6px; font-size: 11px;
+  }
+  .season-range-row input[type=date] {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text); padding: 3px 6px; font-size: 11px; width: 120px;
+  }
+  .season-range-row span { color: var(--muted); }
+  .season-remove {
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    font-size: 14px; padding: 0 4px; line-height: 1;
+  }
+  .season-remove:hover { color: #f87171; }
+  .season-add {
+    background: none; border: 1px dashed var(--border); border-radius: 4px;
+    color: var(--muted); cursor: pointer; font-size: 11px;
+    padding: 4px 10px; width: 100%; text-align: left;
+  }
+  .season-add:hover { border-color: var(--accent); color: var(--accent); }
+  .season-passive-info {
+    font-size: 11px; color: var(--muted); line-height: 1.6;
+  }
+  .season-passive-info b { color: #a3e635; }
+
+  /* ── Thermal summary cards ────────────────────────────────── */
+  .thermal-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 11px;
+    min-width: 180px;
+  }
+  .thermal-card-title { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .thermal-card-stat { display: flex; justify-content: space-between; gap: 12px; line-height: 1.8; }
+  .thermal-card-stat span { color: var(--muted); }
+  .thermal-card-stat b { color: var(--text); }
+  .hvac-heat { color: #f97316 !important; }
+  .hvac-cool { color: #60a5fa !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+    <circle cx="12" cy="12" r="4"/>
+  </svg>
+  <h1>Weather Station</h1>
+  <span id="data-range-label"></span>
+</header>
+
+<!-- Row 1: data loading + date range -->
+<div class="toolbar">
+  <label for="file-input">
+    <span class="file-label">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+      </svg>
+      Load CSV files
+    </span>
+  </label>
+  <input type="file" id="file-input" accept=".csv" multiple>
+  <button class="btn secondary" id="auto-load-btn" title="Auto-fetch all CSVs from this server">⚡ Auto-load</button>
+  <span id="file-status">No files loaded</span>
+
+  <div class="divider"></div>
+  <label>From</label>
+  <input type="date" id="date-from">
+  <label>To</label>
+  <input type="date" id="date-to">
+  <button class="btn" id="apply-btn">Apply</button>
+  <button class="btn secondary" id="all-btn">All</button>
+  <button class="btn secondary" data-days="7">7d</button>
+  <button class="btn secondary" data-days="30">30d</button>
+  <button class="btn secondary" data-days="90">90d</button>
+
+  <div class="divider"></div>
+  <button class="btn secondary icon-btn" id="export-btn">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+    </svg>
+    Export CSV
+  </button>
+
+  <div class="divider"></div>
+  <button class="btn secondary icon-btn" id="analyze-btn">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      <line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
+    </svg>
+    Analyze
+  </button>
+  <div class="divider"></div>
+  <button class="btn secondary icon-btn" id="anomaly-btn">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+      <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+    </svg>
+    Anomalies
+    <span id="anomaly-count"></span>
+  </button>
+</div>
+
+<!-- Row 2: model forecasts -->
+<div class="forecast-bar">
+  <label>Forecasts:</label>
+  <button class="model-btn" id="model-ecmwf-ifs" data-model="ecmwf_ifs_seamless" data-label="ECMWF IFS">
+    <span class="model-dot" style="background:#f97316"></span>ECMWF IFS
+  </button>
+  <button class="model-btn" id="model-ecmwf-aifs" data-model="ecmwf_aifs025" data-label="ECMWF AIFS">
+    <span class="model-dot" style="background:#a855f7"></span>ECMWF AIFS
+  </button>
+  <button class="model-btn" id="model-hrrr" data-model="hrrr_conus" data-label="HRRR">
+    <span class="model-dot" style="background:#ef4444"></span>HRRR
+  </button>
+  <button class="model-btn" id="model-aigfs" data-model="aigfs025" data-label="NOAA AIGFS">
+    <span class="model-dot" style="background:#06b6d4"></span>NOAA AIGFS
+  </button>
+
+  <span id="forecast-status"></span>
+
+  <div class="loc-fields">
+    <span>Lat</span>
+    <input type="number" id="lat-input" placeholder="39.7392" step="0.0001" value="39.970835">
+    <span>Lon</span>
+    <input type="number" id="lon-input" placeholder="-104.9903" step="0.0001" value="-105.264903">
+    <button class="btn" id="fetch-forecast-btn">Fetch</button>
+  </div>
+</div>
+
+<div class="main">
+  <div class="sidebar" id="sidebar">
+    <div>
+      <div class="sidebar-section-title">Observations</div>
+      <div class="sidebar-actions" id="sidebar-actions" style="display:none">
+        <button id="select-all-btn">All</button>
+        <button id="select-none-btn">None</button>
+      </div>
+      <div class="series-list" id="series-list">
+        <div style="font-size:11px;color:var(--muted);padding:4px 5px">Load CSV files to begin</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="chart-area">
+    <div class="empty-state" id="empty-state">
+      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+      </svg>
+      <p>No data to display</p>
+      <small>Load CSV files and select at least one series</small>
+    </div>
+    <div id="chart" style="display:none"></div>
+    <div id="stats-bar" style="display:none"></div>
+    <div class="anomaly-legend" id="anomaly-legend">
+      <b>⚠ Anomalies</b> use the Tukey IQR method:<br>
+      values outside <b>Q1 − 2×IQR</b> or <b>Q3 + 2×IQR</b><br>
+      on the visible data window.
+    </div>
+    <div class="loading" id="loading" style="display:none">
+      <div class="spinner"></div><span id="loading-msg">Processing…</span>
+    </div>
+
+    <!-- Analysis panel -->
+    <div class="analysis-panel" id="analysis-panel">
+      <div class="analysis-tabs">
+        <div class="analysis-tab active" data-view="wind-rose">🌬 Wind Rose</div>
+        <div class="analysis-tab" data-view="diurnal">⏱ Daily Pattern</div>
+        <div class="analysis-tab" data-view="records">🏆 Records</div>
+        <div class="analysis-tab" data-view="thermal">🏠 Thermal</div>
+        <div class="analysis-tab-spacer"></div>
+        <span class="close-analysis" id="close-analysis">×</span>
+      </div>
+      <div class="analysis-content">
+        <div class="analysis-view active" id="view-wind-rose">
+          <div id="wind-rose-chart" style="flex:1;min-width:0"></div>
+        </div>
+        <div class="analysis-view" id="view-diurnal">
+          <div id="diurnal-chart" style="flex:1;min-width:0"></div>
+        </div>
+        <div class="analysis-view" id="view-thermal" style="flex-direction:column;overflow-y:auto">
+          <!-- Season configuration -->
+          <div class="season-config" id="season-config">
+            <div class="season-config-header" id="season-config-toggle">
+              <span class="caret">▶</span>
+              ⚙ Season Configuration
+              <span style="font-weight:400;font-size:11px;margin-left:8px" id="season-config-summary"></span>
+            </div>
+            <div class="season-config-body" id="season-config-body">
+              <div class="season-group">
+                <div class="season-group-title heat">🔥 Heating Active</div>
+                <div class="season-ranges" id="heat-ranges"></div>
+                <button class="season-add" id="add-heat-range">+ Add heating period</button>
+              </div>
+              <div class="season-group">
+                <div class="season-group-title cool">❄ Cooling Active</div>
+                <div class="season-ranges" id="cool-ranges"></div>
+                <button class="season-add" id="add-cool-range">+ Add cooling period</button>
+              </div>
+              <div class="season-group">
+                <div class="season-group-title passive">🌿 Passive Periods</div>
+                <div class="season-passive-info" id="passive-info">
+                  All dates not in a heating or cooling range.<br>
+                  These train the regression model.
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="thermal-summary" style="padding:8px 16px;border-bottom:1px solid var(--border);display:flex;gap:24px;flex-shrink:0;flex-wrap:wrap"></div>
+          <!-- Row 1: lag correlation + scatter phase plot -->
+          <div style="display:flex;flex-shrink:0;height:260px">
+            <div id="thermal-lag-chart" style="flex:1;min-width:0"></div>
+            <div style="flex:1.2;min-width:0;display:flex;flex-direction:column;">
+              <div style="display:flex;align-items:center;padding:4px 8px 0;flex-shrink:0">
+                <span style="font-size:10px;color:var(--muted);flex:1">Thermal Phase: outdoor (lagged) vs indoor °F</span>
+                <span class="scatter-info-icon" tabindex="0">ℹ
+                  <div class="scatter-tooltip">
+                    <b>Thermal Phase Scatter</b><br>
+                    Outdoor temp (shifted by thermal lag) vs indoor temp at that moment.<br><br>
+                    <b>How to read it:</b><br>
+                    • <b>X-axis</b> — outdoor °F, smoothed &amp; shifted back by the lag hours<br>
+                    • <b>Y-axis</b> — indoor °F at that moment<br>
+                    • <b>Dashed line</b> — regression fit: what indoor temp <em>should be</em> from outdoor alone<br>
+                    • <span style="color:#f97316">■</span> <b>Orange</b> — heater running (indoor warmer than predicted)<br>
+                    • <span style="color:#38bdf8">■</span> <b>Blue</b> — A/C running (indoor cooler than predicted)<br>
+                    • <span style="color:#6b7280">■</span> <b>Gray</b> — HVAC idle, house tracking outdoor naturally<br><br>
+                    <b>The physics:</b><br>
+                    • Tight cluster along line = good coupling, HVAC off<br>
+                    • Slope = thermal coupling (indoor °F per outdoor °F)<br>
+                    • Wide scatter = heavy HVAC use fighting the outdoor temp<br>
+                    • Flat line = thermally decoupled (typical for basements)
+                  </div>
+                </span>
+              </div>
+              <div id="thermal-scatter-chart" style="flex:1;min-width:0"></div>
+            </div>
+          </div>
+          <!-- Row 2: HVAC residual time series -->
+          <div style="flex-shrink:0;height:240px">
+            <div id="thermal-residual-chart" style="width:100%;height:100%"></div>
+          </div>
+          <!-- Row 3: monthly HVAC activity -->
+          <div style="flex-shrink:0;height:220px">
+            <div id="thermal-monthly-chart" style="width:100%;height:100%"></div>
+          </div>
+        </div>
+        <div class="analysis-view" id="view-records">
+          <div class="records-scroll">
+            <div class="records-grid" id="records-grid">
+              <div class="rg-head">Series</div>
+              <div class="rg-head" style="text-align:right">High</div>
+              <div class="rg-head">Date</div>
+              <div class="rg-head" style="text-align:right">Low</div>
+              <div class="rg-head">Date</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Palette ─────────────────────────────────────────────────────────────
+const PALETTE = [
+  '#4f8ef7','#f97316','#22c55e','#a855f7','#ef4444',
+  '#06b6d4','#eab308','#ec4899','#14b8a6','#f43f5e',
+  '#8b5cf6','#10b981','#fb923c','#60a5fa','#34d399',
+  '#c084fc','#f87171','#38bdf8','#facc15','#fb7185',
+  '#a78bfa','#4ade80','#fdba74','#93c5fd','#6ee7b7',
+  '#d946ef','#fbbf24','#67e8f9','#f9a8d4','#86efac',
+];
+
+const SERIES_COLOR_OVERRIDES = {
+  'Office Temperature (°F)': '#22c55e',
+};
+
+// Default selected series
+const DEFAULT_SELECTED = [
+  'Outdoor Temperature (°F)',
+  'Office Temperature (°F)',
+  'Basement Temperature (°F)',
+];
+
+// ── Open-Meteo model config ─────────────────────────────────────────────
+const MODELS = {
+  ecmwf_ifs_seamless: { label: 'ECMWF IFS',  color: '#f97316', dash: 'dash' },
+  ecmwf_aifs025:      { label: 'ECMWF AIFS', color: '#a855f7', dash: 'dot'  },
+  hrrr_conus:         { label: 'HRRR',       color: '#ef4444', dash: 'dashdot' },
+  aigfs025:           { label: 'NOAA AIGFS', color: '#06b6d4', dash: 'longdash' },
+};
+
+// Map Open-Meteo hourly var → station column name
+const FORECAST_VAR_MAP = {
+  temperature_2m:      'Outdoor Temperature (°F)',
+  relative_humidity_2m:'Humidity (%)',
+  wind_speed_10m:      'Wind Speed (mph)',
+  wind_gusts_10m:      'Wind Gust (mph)',
+  shortwave_radiation: 'Solar Radiation (W/m^2)',
+};
+const OPEN_METEO_VARS = Object.keys(FORECAST_VAR_MAP).join(',');
+
+// ── State ───────────────────────────────────────────────────────────────
+let allRows      = [];
+let columns      = [];
+let checkedCols  = new Set();
+let dateFrom     = null;
+let dateTo       = null;
+let showAnomalies = false;
+let activeModels  = new Set();
+let forecastData  = {};   // { modelKey: { times: [], vars: { colName: [] } } }
+
+// ── DOM ─────────────────────────────────────────────────────────────────
+const fileInput      = document.getElementById('file-input');
+const fileStatus     = document.getElementById('file-status');
+const dateFromEl     = document.getElementById('date-from');
+const dateToEl       = document.getElementById('date-to');
+const applyBtn       = document.getElementById('apply-btn');
+const allBtn         = document.getElementById('all-btn');
+const seriesList     = document.getElementById('series-list');
+const sidebarActions = document.getElementById('sidebar-actions');
+const selectAllBtn   = document.getElementById('select-all-btn');
+const selectNoneBtn  = document.getElementById('select-none-btn');
+const emptyState     = document.getElementById('empty-state');
+const chartEl        = document.getElementById('chart');
+const loadingEl      = document.getElementById('loading');
+const loadingMsg     = document.getElementById('loading-msg');
+const dataRangeLabel = document.getElementById('data-range-label');
+const anomalyBtn     = document.getElementById('anomaly-btn');
+const anomalyCount   = document.getElementById('anomaly-count');
+const anomalyLegend  = document.getElementById('anomaly-legend');
+const forecastStatus = document.getElementById('forecast-status');
+const latInput       = document.getElementById('lat-input');
+const lonInput       = document.getElementById('lon-input');
+const fetchForecastBtn = document.getElementById('fetch-forecast-btn');
+const exportBtn        = document.getElementById('export-btn');
+const statsBar         = document.getElementById('stats-bar');
+
+// ── CSV Parser ──────────────────────────────────────────────────────────
+function parseCSV(text) {
+  const lines = text.split('\n').filter(l => l.trim());
+  if (lines.length < 2) return { headers: [], rows: [] };
+
+  function parseLine(line) {
+    const result = []; let cur = '', inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { inQ = !inQ; continue; }
+      if (c === ',' && !inQ) { result.push(cur); cur = ''; continue; }
+      cur += c;
+    }
+    result.push(cur);
+    return result;
+  }
+
+  const headers = parseLine(lines[0]);
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const vals = parseLine(lines[i]);
+    if (vals.length < 2) continue;
+    const ts = new Date(vals[0]);
+    if (isNaN(ts)) continue;
+    const row = { ts };
+    for (let j = 2; j < headers.length; j++) {
+      const h = headers[j]; if (!h) continue;
+      const v = parseFloat(vals[j]);
+      row[h] = isNaN(v) ? vals[j] : v;
+    }
+    rows.push(row);
+  }
+  return { headers: headers.slice(2), rows };
+}
+
+// ── File Loading ────────────────────────────────────────────────────────
+fileInput.addEventListener('change', async e => {
+  const files = [...e.target.files];
+  if (!files.length) return;
+  showLoading(true, 'Parsing CSV files…');
+  await sleep(0);
+
+  const allParsed = []; let cols = null;
+  for (const file of files) {
+    const text = await readFile(file);
+    const { headers, rows } = parseCSV(text);
+    if (!cols) cols = headers;
+    allParsed.push(...rows);
+  }
+  allParsed.sort((a, b) => a.ts - b.ts);
+  allRows = allParsed; columns = cols || [];
+
+  fileStatus.textContent = `${files.length} file${files.length > 1 ? 's' : ''} · ${allRows.length.toLocaleString()} readings`;
+
+  if (allRows.length) {
+    const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
+    dateFrom = first; dateTo = last;
+    dateFromEl.value = toDateInput(first);
+    dateToEl.value   = toDateInput(last);
+    dataRangeLabel.textContent = `${fmtDate(first)} – ${fmtDate(last)}`;
+  }
+  buildSidebar();
+  showLoading(false);
+  renderChart();
+});
+
+function readFile(f) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = e => res(e.target.result); r.onerror = rej;
+    r.readAsText(f);
+  });
+}
+
+// ── Sidebar ─────────────────────────────────────────────────────────────
+function buildSidebar() {
+  seriesList.innerHTML = '';
+  sidebarActions.style.display = 'flex';
+  checkedCols.clear();
+
+  columns.forEach((col, i) => {
+    if (DEFAULT_SELECTED.includes(col)) checkedCols.add(col);
+
+    const item = document.createElement('label');
+    item.className = 'series-item';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = checkedCols.has(col);
+    cb.addEventListener('change', () => {
+      if (cb.checked) checkedCols.add(col); else checkedCols.delete(col);
+      renderChart();
+    });
+
+    const swatch = document.createElement('div');
+    swatch.className = 'series-swatch';
+    swatch.style.background = SERIES_COLOR_OVERRIDES[col] ?? PALETTE[i % PALETTE.length];
+
+    const name = document.createElement('span');
+    name.className = 'series-name'; name.textContent = col;
+
+    item.append(cb, swatch, name);
+    seriesList.appendChild(item);
+  });
+
+  selectAllBtn.onclick = () => {
+    checkedCols = new Set(columns);
+    seriesList.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = true);
+    renderChart();
+  };
+  selectNoneBtn.onclick = () => {
+    checkedCols.clear();
+    seriesList.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
+    renderChart();
+  };
+}
+
+// ── Date controls ────────────────────────────────────────────────────────
+applyBtn.addEventListener('click', () => {
+  if (dateFromEl.value) dateFrom = new Date(dateFromEl.value + 'T00:00:00');
+  if (dateToEl.value)   dateTo   = new Date(dateToEl.value + 'T23:59:59');
+  renderChart();
+  if (analysisPanel.classList.contains('visible')) renderActiveView();
+});
+allBtn.addEventListener('click', () => {
+  if (!allRows.length) return;
+  dateFrom = allRows[0].ts; dateTo = allRows[allRows.length - 1].ts;
+  dateFromEl.value = toDateInput(dateFrom);
+  dateToEl.value   = toDateInput(dateTo);
+  renderChart();
+  if (analysisPanel.classList.contains('visible')) renderActiveView();
+});
+
+// Quick-range buttons: 7d / 30d / 90d
+document.querySelectorAll('[data-days]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (!allRows.length) return;
+    const days = parseInt(btn.dataset.days);
+    dateTo   = allRows[allRows.length - 1].ts;
+    dateFrom = new Date(dateTo.getTime() - days * 86400 * 1000);
+    dateFromEl.value = toDateInput(dateFrom);
+    dateToEl.value   = toDateInput(dateTo);
+    renderChart();
+    if (analysisPanel.classList.contains('visible')) renderActiveView();
+  });
+});
+
+// Export visible filtered data as CSV
+exportBtn.addEventListener('click', () => {
+  const filtered = allRows.filter(r => {
+    if (dateFrom && r.ts < dateFrom) return false;
+    if (dateTo   && r.ts > dateTo)   return false;
+    return true;
+  });
+  if (!filtered.length) return;
+
+  const activeCols = columns.filter(c => checkedCols.has(c));
+  const header = ['Date', ...activeCols].join(',');
+  const rows = filtered.map(r => {
+    const vals = activeCols.map(c => {
+      const v = r[c];
+      return v == null ? '' : (typeof v === 'string' ? `"${v}"` : v);
+    });
+    return [r.ts.toISOString(), ...vals].join(',');
+  });
+  const csv  = [header, ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = 'weather-export.csv'; a.click();
+  URL.revokeObjectURL(url);
+});
+
+// ── Anomaly toggle ───────────────────────────────────────────────────────
+anomalyBtn.addEventListener('click', () => {
+  showAnomalies = !showAnomalies;
+  anomalyBtn.classList.toggle('active', showAnomalies);
+  anomalyLegend.classList.toggle('visible', showAnomalies);
+  renderChart();
+});
+
+// ── Anomaly detection (Tukey IQR) ────────────────────────────────────────
+function detectAnomalies(values) {
+  const sorted = [...values].filter(v => v != null).sort((a, b) => a - b);
+  if (sorted.length < 10) return new Set();
+  const q1 = sorted[Math.floor(sorted.length * 0.25)];
+  const q3 = sorted[Math.floor(sorted.length * 0.75)];
+  const iqr = q3 - q1;
+  const lo = q1 - 2 * iqr;
+  const hi = q3 + 2 * iqr;
+  const indices = new Set();
+  values.forEach((v, i) => { if (v != null && (v < lo || v > hi)) indices.add(i); });
+  return indices;
+}
+
+// ── Forecast: model button toggles ──────────────────────────────────────
+document.querySelectorAll('.model-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const modelKey = btn.dataset.model;
+    if (activeModels.has(modelKey)) {
+      activeModels.delete(modelKey);
+      btn.classList.remove('active');
+    } else {
+      activeModels.add(modelKey);
+      btn.classList.add('active');
+    }
+    renderChart();
+  });
+});
+
+fetchForecastBtn.addEventListener('click', fetchForecasts);
+
+async function fetchForecasts() {
+  const lat = parseFloat(latInput.value);
+  const lon = parseFloat(lonInput.value);
+  if (isNaN(lat) || isNaN(lon)) {
+    forecastStatus.textContent = '⚠ Enter lat/lon first';
+    return;
+  }
+  if (!activeModels.size) {
+    forecastStatus.textContent = '⚠ Select at least one model above';
+    return;
+  }
+
+  forecastData = {};
+  const modelsToFetch = [...activeModels];
+
+  for (const modelKey of modelsToFetch) {
+    const cfg = MODELS[modelKey];
+    forecastStatus.textContent = `Fetching ${cfg.label}…`;
+    try {
+      const url = new URL('https://api.open-meteo.com/v1/forecast');
+      url.searchParams.set('latitude',         lat);
+      url.searchParams.set('longitude',        lon);
+      url.searchParams.set('hourly',           OPEN_METEO_VARS);
+      url.searchParams.set('temperature_unit', 'fahrenheit');
+      url.searchParams.set('wind_speed_unit',  'mph');
+      url.searchParams.set('precipitation_unit','inch');
+      url.searchParams.set('forecast_days',    '10');
+      url.searchParams.set('models',           modelKey);
+      url.searchParams.set('timezone',         'UTC');
+
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+
+      const times = (data.hourly?.time ?? []).map(t => new Date(t + 'Z'));
+      const vars  = {};
+      for (const [omVar, colName] of Object.entries(FORECAST_VAR_MAP)) {
+        const raw = data.hourly?.[omVar];
+        if (raw) vars[colName] = raw;
+      }
+      forecastData[modelKey] = { times, vars };
+    } catch (err) {
+      console.warn(`Failed to fetch ${modelKey}:`, err);
+      forecastStatus.textContent = `✗ ${cfg.label}: ${err.message}`;
+    }
+  }
+
+  const fetched = Object.keys(forecastData).map(k => MODELS[k].label);
+  forecastStatus.textContent = fetched.length
+    ? `✓ ${fetched.join(', ')}`
+    : 'No forecast data';
+
+  // Auto-zoom: last 14 days of observations + 10-day forecast
+  if (allRows.length && fetched.length) {
+    const now    = new Date();
+    const start  = new Date(now.getTime() - 14 * 86400 * 1000);
+    const endFc  = new Date(now.getTime() + 10 * 86400 * 1000);
+    dateFrom     = start;
+    dateTo       = endFc;
+    dateFromEl.value = toDateInput(start);
+    dateToEl.value   = toDateInput(endFc);
+  }
+
+  renderChart();
+}
+
+// ── Chart rendering ──────────────────────────────────────────────────────
+let chartRendered = false;
+
+function renderChart() {
+  if (!allRows.length || !checkedCols.size) {
+    emptyState.style.display = 'flex';
+    chartEl.style.display = 'none';
+    return;
+  }
+
+  const filtered = allRows.filter(r => {
+    if (dateFrom && r.ts < dateFrom) return false;
+    if (dateTo   && r.ts > dateTo)   return false;
+    return true;
+  });
+
+  if (!filtered.length) {
+    emptyState.style.display = 'flex';
+    chartEl.style.display = 'none';
+    return;
+  }
+
+  emptyState.style.display = 'none';
+  chartEl.style.display    = 'block';
+
+  const times  = filtered.map(r => r.ts);
+  const traces = [];
+  let totalAnomalies = 0;
+
+  // ── Observation traces ─────────────────────────────────────────────
+  columns.forEach((col, i) => {
+    if (!checkedCols.has(col)) return;
+    const color  = SERIES_COLOR_OVERRIDES[col] ?? PALETTE[i % PALETTE.length];
+    const yvals  = filtered.map(r => typeof r[col] === 'number' ? r[col] : null);
+
+    traces.push({
+      x: times, y: yvals,
+      name: col,
+      type: 'scattergl',
+      mode: 'lines',
+      line: { color, width: 1.5 },
+      connectgaps: false,
+    });
+
+    // Anomaly markers on top
+    if (showAnomalies) {
+      const anomalyIdx = detectAnomalies(yvals);
+      if (anomalyIdx.size) {
+        totalAnomalies += anomalyIdx.size;
+        const ax = [], ay = [], at = [];
+        anomalyIdx.forEach(idx => {
+          ax.push(times[idx]);
+          ay.push(yvals[idx]);
+          at.push(`${col}: ${yvals[idx]?.toFixed(1)}`);
+        });
+        traces.push({
+          x: ax, y: ay, text: at,
+          name: `⚠ ${col}`,
+          type: 'scattergl',
+          mode: 'markers',
+          marker: { color: '#f59e0b', size: 7, symbol: 'circle', line: { color: '#000', width: 1 } },
+          hovertemplate: '%{text}<extra>anomaly</extra>',
+          showlegend: false,
+        });
+      }
+    }
+  });
+
+  // Update anomaly badge
+  if (showAnomalies) {
+    anomalyCount.style.display = totalAnomalies ? 'inline' : 'none';
+    anomalyCount.textContent   = totalAnomalies;
+  } else {
+    anomalyCount.style.display = 'none';
+  }
+
+  // ── Forecast traces ────────────────────────────────────────────────
+  for (const [modelKey, fd] of Object.entries(forecastData)) {
+    if (!activeModels.has(modelKey)) continue;
+    const cfg = MODELS[modelKey];
+    console.log(`Rendering forecast: ${modelKey}, times: ${fd.times.length}, vars:`, Object.keys(fd.vars));
+
+    for (const col of checkedCols) {
+      if (!fd.vars[col]) continue;
+      console.log(`  Adding trace for ${col}: ${fd.vars[col].length} points`);
+
+      traces.push({
+        x: fd.times,
+        y: fd.vars[col],
+        name: `${cfg.label} — ${col}`,
+        type: 'scatter',          // NOT scattergl — WebGL drops dash styles
+        mode: 'lines',
+        line: { color: cfg.color, width: 2.5, dash: cfg.dash },
+        opacity: 0.9,
+        connectgaps: false,
+      });
+    }
+  }
+
+  // ── Layout ────────────────────────────────────────────────────────
+  const layout = {
+    paper_bgcolor: '#0f1117',
+    plot_bgcolor:  '#0f1117',
+    font: { color: '#e2e6f0', family: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', size: 11 },
+    margin: { t: 16, r: 16, b: 50, l: 56 },
+    legend: {
+      bgcolor: '#1a1d27', bordercolor: '#2e3245', borderwidth: 1,
+      orientation: 'h', x: 0, y: -0.15, xanchor: 'left',
+    },
+    xaxis: {
+      type: 'date',
+      gridcolor: '#2e3245', linecolor: '#2e3245', tickcolor: '#2e3245',
+      rangeslider: { visible: true, bgcolor: '#1a1d27', bordercolor: '#2e3245', thickness: 0.04 },
+    },
+    yaxis: {
+      gridcolor: '#2e3245', linecolor: '#2e3245', tickcolor: '#2e3245', zeroline: false,
+    },
+    hovermode: 'x unified',
+    hoverlabel: { bgcolor: '#1a1d27', bordercolor: '#2e3245', font: { color: '#e2e6f0', size: 11 } },
+    // Vertical "now" line when forecast is shown
+    ...(Object.keys(forecastData).length ? {
+      shapes: [{
+        type: 'line', xref: 'x', yref: 'paper',
+        x0: new Date().toISOString(), x1: new Date().toISOString(),
+        y0: 0, y1: 1,
+        line: { color: '#ffffff33', width: 1, dash: 'dot' },
+      }],
+      annotations: [{
+        xref: 'x', yref: 'paper',
+        x: new Date().toISOString(), y: 1,
+        text: 'now', showarrow: false,
+        font: { color: '#ffffff55', size: 10 },
+        xanchor: 'left', yanchor: 'top',
+      }],
+    } : {}),
+  };
+
+  const config = {
+    responsive: true, displayModeBar: true,
+    modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+    displaylogo: false,
+    toImageButtonOptions: { format: 'png', scale: 2 },
+  };
+
+  if (chartRendered) Plotly.react(chartEl, traces, layout, config);
+  else {
+    Plotly.newPlot(chartEl, traces, layout, config);
+    chartRendered = true;
+    // Sync analysis panel when user drag-zooms or double-click resets the chart
+    chartEl.on('plotly_relayout', evt => {
+      if (!analysisPanel.classList.contains('visible')) return;
+      const x0 = evt['xaxis.range[0]'];
+      const x1 = evt['xaxis.range[1]'];
+      if (x0 && x1) {
+        // Drag-zoom: update analysis range to match visible window
+        dateFrom = new Date(x0);
+        dateTo   = new Date(x1);
+      } else if (evt['xaxis.autorange'] || evt['xaxis.range'] === undefined && x0 === undefined) {
+        // Double-click reset: restore full range
+        dateFrom = null;
+        dateTo   = null;
+      }
+      renderActiveView();
+    });
+  }
+
+  updateStatsBar(filtered);
+}
+
+function updateStatsBar(filtered) {
+  const activeCols = columns.filter(c => checkedCols.has(c));
+  if (!activeCols.length) { statsBar.style.display = 'none'; return; }
+
+  statsBar.style.display = 'flex';
+  statsBar.innerHTML = '';
+
+  activeCols.forEach((col, idx) => {
+    const colIdx = columns.indexOf(col);
+    const color  = SERIES_COLOR_OVERRIDES[col] ?? PALETTE[colIdx % PALETTE.length];
+    const vals   = filtered.map(r => r[col]).filter(v => typeof v === 'number' && !isNaN(v));
+    if (!vals.length) return;
+
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const avg = vals.reduce((s, v) => s + v, 0) / vals.length;
+
+    const chip = document.createElement('div');
+    chip.className = 'stat-chip';
+    chip.innerHTML = `
+      <div class="stat-swatch" style="background:${color}"></div>
+      <span class="stat-label" title="${col}">${col}</span>
+      <div class="stat-values">
+        <span>min <b>${min.toFixed(1)}</b></span>
+        <span>avg <b>${avg.toFixed(1)}</b></span>
+        <span>max <b>${max.toFixed(1)}</b></span>
+      </div>
+    `;
+    statsBar.appendChild(chip);
+  });
+}
+
+// ── Season configuration ─────────────────────────────────────────────────
+const SEASON_KEY = 'weather_season_config';
+
+function loadSeasonConfig() {
+  try { return JSON.parse(localStorage.getItem(SEASON_KEY)) || { heat: [], cool: [] }; }
+  catch { return { heat: [], cool: [] }; }
+}
+function saveSeasonConfig(cfg) {
+  localStorage.setItem(SEASON_KEY, JSON.stringify(cfg));
+}
+
+// Returns 'heat' | 'cool' | 'passive' for a given Date
+function classifyDate(ts, cfg) {
+  const d = ts.toISOString().slice(0, 10); // YYYY-MM-DD
+  for (const [from, to] of cfg.heat) {
+    if (from && to && d >= from && d <= to) return 'heat';
+  }
+  for (const [from, to] of cfg.cool) {
+    if (from && to && d >= from && d <= to) return 'cool';
+  }
+  return 'passive';
+}
+
+function renderSeasonUI() {
+  const cfg = loadSeasonConfig();
+
+  function renderRanges(containerId, type) {
+    const container = document.getElementById(containerId);
+    container.innerHTML = '';
+    const ranges = cfg[type];
+    ranges.forEach(([from, to], idx) => {
+      const row = document.createElement('div');
+      row.className = 'season-range-row';
+      row.innerHTML = `
+        <input type="date" value="${from}" data-type="${type}" data-idx="${idx}" data-field="from">
+        <span>→</span>
+        <input type="date" value="${to}" data-type="${type}" data-idx="${idx}" data-field="to">
+        <button class="season-remove" data-type="${type}" data-idx="${idx}">×</button>`;
+      container.appendChild(row);
+    });
+  }
+
+  renderRanges('heat-ranges', 'heat');
+  renderRanges('cool-ranges', 'cool');
+  updatePassiveInfo(cfg);
+  updateSeasonSummary(cfg);
+
+  // Wire events (re-wire each render to avoid duplicates — use delegation on parent)
+  const body = document.getElementById('season-config-body');
+  body.oninput = e => {
+    const { type, idx, field } = e.target.dataset;
+    if (!type) return;
+    cfg[type][idx][field === 'from' ? 0 : 1] = e.target.value;
+    saveSeasonConfig(cfg);
+    updatePassiveInfo(cfg);
+    updateSeasonSummary(cfg);
+    if (analysisPanel.classList.contains('visible')) renderActiveView();
+  };
+  body.onclick = e => {
+    const btn = e.target.closest('.season-remove, .season-add');
+    if (!btn) return;
+    if (btn.classList.contains('season-remove')) {
+      const { type, idx } = btn.dataset;
+      cfg[type].splice(Number(idx), 1);
+    } else if (btn.id === 'add-heat-range') {
+      cfg.heat.push(['', '']);
+    } else if (btn.id === 'add-cool-range') {
+      cfg.cool.push(['', '']);
+    }
+    saveSeasonConfig(cfg);
+    renderRanges('heat-ranges', 'heat');
+    renderRanges('cool-ranges', 'cool');
+    updatePassiveInfo(cfg);
+    updateSeasonSummary(cfg);
+    if (analysisPanel.classList.contains('visible')) renderActiveView();
+  };
+}
+
+function updatePassiveInfo(cfg) {
+  const heatCount = cfg.heat.filter(([f, t]) => f && t).length;
+  const coolCount = cfg.cool.filter(([f, t]) => f && t).length;
+  const info = document.getElementById('passive-info');
+  if (heatCount === 0 && coolCount === 0) {
+    info.innerHTML = 'No seasons defined — using RANSAC estimation.<br><span style="color:var(--accent)">Add heating/cooling periods above for better accuracy.</span>';
+  } else {
+    info.innerHTML = `${heatCount} heating + ${coolCount} cooling range(s) defined.<br>Everything else is treated as <b>passive</b> and used to train the regression model.`;
+  }
+}
+
+function updateSeasonSummary(cfg) {
+  const heatCount = cfg.heat.filter(([f, t]) => f && t).length;
+  const coolCount = cfg.cool.filter(([f, t]) => f && t).length;
+  const el = document.getElementById('season-config-summary');
+  el.textContent = (heatCount || coolCount)
+    ? `(${heatCount} heat, ${coolCount} cool range${coolCount !== 1 ? 's' : ''})`
+    : '(not configured — click to set up)';
+}
+
+document.getElementById('season-config-toggle').addEventListener('click', () => {
+  const header = document.getElementById('season-config-toggle');
+  const body   = document.getElementById('season-config-body');
+  const open   = body.classList.toggle('open');
+  header.classList.toggle('open', open);
+  if (open) renderSeasonUI();
+});
+
+// Init summary on load
+updateSeasonSummary(loadSeasonConfig());
+
+// ── Analysis panel ───────────────────────────────────────────────────────
+const analyzeBtn    = document.getElementById('analyze-btn');
+const analysisPanel = document.getElementById('analysis-panel');
+const closeAnalysis = document.getElementById('close-analysis');
+let   activeView    = 'wind-rose';
+let   analysisRendered = { 'wind-rose': false, diurnal: false, records: false };
+
+function triggerChartResize() {
+  // Give CSS a frame to apply, then tell Plotly to refit
+  requestAnimationFrame(() => {
+    window.dispatchEvent(new Event('resize'));
+    if (chartRendered) Plotly.relayout(chartEl, { autosize: true });
+  });
+}
+
+analyzeBtn.addEventListener('click', () => {
+  if (!allRows.length) return;
+  const open = analysisPanel.classList.toggle('visible');
+  analyzeBtn.classList.toggle('active', open);
+  triggerChartResize();
+  if (open) renderActiveView();
+});
+
+closeAnalysis.addEventListener('click', () => {
+  analysisPanel.classList.remove('visible');
+  analyzeBtn.classList.remove('active');
+  triggerChartResize();
+});
+
+document.querySelectorAll('.analysis-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.analysis-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.analysis-view').forEach(v => v.classList.remove('active'));
+    tab.classList.add('active');
+    activeView = tab.dataset.view;
+    document.getElementById(`view-${activeView}`).classList.add('active');
+    renderActiveView();
+  });
+});
+
+function renderActiveView() {
+  if (!allRows.length) return;
+  const filtered = allRows.filter(r => {
+    if (dateFrom && r.ts < dateFrom) return false;
+    if (dateTo   && r.ts > dateTo)   return false;
+    return true;
+  });
+  if (activeView === 'wind-rose')  renderWindRose(filtered);
+  if (activeView === 'diurnal')    renderDiurnal(filtered);
+  if (activeView === 'records')    renderRecords(filtered);
+  if (activeView === 'thermal')    renderThermal(filtered);
+}
+
+// ── Wind Rose ─────────────────────────────────────────────────────────────
+function renderWindRose(filtered) {
+  const dirCol   = 'Wind Direction (°)';
+  const speedCol = 'Wind Speed (mph)';
+  if (!columns.includes(dirCol) || !columns.includes(speedCol)) return;
+
+  // Bin into 16 compass directions × 4 speed bands
+  const DIR_LABELS = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  const SPEED_BINS = [
+    { max: 5,   label: '0–5 mph',   color: '#60a5fa' },
+    { max: 12,  label: '5–12 mph',  color: '#4f8ef7' },
+    { max: 20,  label: '12–20 mph', color: '#f97316' },
+    { max: Infinity, label: '20+ mph', color: '#ef4444' },
+  ];
+
+  // count[dirBin][speedBin] = number of readings
+  const count = Array.from({length: 16}, () => Array(4).fill(0));
+  let total = 0;
+
+  for (const r of filtered) {
+    const d = r[dirCol], s = r[speedCol];
+    if (typeof d !== 'number' || typeof s !== 'number') continue;
+    if (s < 0.5) continue; // calm — skip
+    const dirBin   = Math.round(d / 22.5) % 16;
+    const speedBin = SPEED_BINS.findIndex(b => s < b.max);
+    count[dirBin][speedBin]++;
+    total++;
+  }
+
+  const traces = SPEED_BINS.map((band, si) => ({
+    type: 'barpolar',
+    r:    DIR_LABELS.map((_, di) => total ? (count[di][si] / total * 100) : 0),
+    theta: DIR_LABELS,
+    name: band.label,
+    marker: { color: band.color },
+    hovertemplate: '%{r:.1f}%<extra>%{fullData.name}</extra>',
+  }));
+
+  const layout = {
+    paper_bgcolor: '#0f1117',
+    plot_bgcolor:  '#0f1117',
+    font: { color: '#e2e6f0', size: 11 },
+    margin: { t: 20, r: 20, b: 20, l: 20 },
+    polar: {
+      bgcolor: '#1a1d27',
+      radialaxis: {
+        ticksuffix: '%', angle: 45, dtick: 5,
+        gridcolor: '#2e3245', linecolor: '#2e3245',
+        tickcolor: '#2e3245', tickfont: { size: 9 },
+      },
+      angularaxis: {
+        direction: 'clockwise',
+        gridcolor: '#2e3245', linecolor: '#2e3245',
+      },
+    },
+    legend: {
+      bgcolor: '#1a1d2700', font: { size: 10 },
+      orientation: 'v', x: 1.05,
+    },
+    title: {
+      text: `Wind rose · ${total.toLocaleString()} readings`,
+      font: { size: 12, color: '#7b82a0' }, y: 0.98,
+    },
+  };
+
+  const el = document.getElementById('wind-rose-chart');
+  Plotly.react(el, traces, layout, { responsive: true, displaylogo: false, displayModeBar: false });
+}
+
+// ── Diurnal Pattern ──────────────────────────────────────────────────────
+function renderDiurnal(filtered) {
+  const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const MONTH_COLORS = [
+    '#60a5fa','#818cf8','#a78bfa','#c084fc','#e879f9','#f43f5e',
+    '#fb923c','#fbbf24','#4ade80','#34d399','#22d3ee','#38bdf8',
+  ];
+
+  // Pick the primary checked numeric column (prefer outdoor temp)
+  const col = checkedCols.has('Outdoor Temperature (°F)')
+    ? 'Outdoor Temperature (°F)'
+    : [...checkedCols].find(c => columns.includes(c) && typeof filtered[0]?.[c] === 'number');
+  if (!col) return;
+
+  // hourly[month][hour] = [values]
+  const byMonthHour = {};
+  for (const r of filtered) {
+    const v = r[col];
+    if (typeof v !== 'number') continue;
+    const m = r.ts.getMonth();
+    const h = r.ts.getHours();
+    const key = `${m}-${h}`;
+    if (!byMonthHour[key]) byMonthHour[key] = [];
+    byMonthHour[key].push(v);
+  }
+
+  // Find which months are in the data
+  const months = [...new Set(filtered.map(r => r.ts.getMonth()))].sort((a, b) => a - b);
+  const hours  = Array.from({length: 24}, (_, i) => i);
+
+  const traces = months.map(m => {
+    const avgs = hours.map(h => {
+      const vals = byMonthHour[`${m}-${h}`] ?? [];
+      return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+    });
+    return {
+      x: hours.map(h => `${h.toString().padStart(2,'0')}:00`),
+      y: avgs,
+      name: MONTH_NAMES[m],
+      type: 'scatter',
+      mode: 'lines',
+      line: { color: MONTH_COLORS[m], width: 2 },
+      connectgaps: true,
+    };
+  });
+
+  const layout = {
+    paper_bgcolor: '#0f1117',
+    plot_bgcolor:  '#0f1117',
+    font: { color: '#e2e6f0', size: 11 },
+    margin: { t: 30, r: 20, b: 40, l: 50 },
+    title: {
+      text: `Average ${col} by hour of day`,
+      font: { size: 12, color: '#7b82a0' }, y: 0.97,
+    },
+    xaxis: {
+      title: { text: 'Hour (local)', standoff: 6 },
+      gridcolor: '#2e3245', linecolor: '#2e3245',
+    },
+    yaxis: {
+      gridcolor: '#2e3245', linecolor: '#2e3245', zeroline: false,
+    },
+    legend: { bgcolor: '#1a1d2700', font: { size: 10 }, orientation: 'h', y: -0.2 },
+    hovermode: 'x unified',
+    hoverlabel: { bgcolor: '#1a1d27', bordercolor: '#2e3245', font: { size: 11 } },
+  };
+
+  const el = document.getElementById('diurnal-chart');
+  Plotly.react(el, traces, layout, { responsive: true, displaylogo: false, displayModeBar: false });
+}
+
+// ── Records ──────────────────────────────────────────────────────────────
+function renderRecords(filtered) {
+  const grid = document.getElementById('records-grid');
+  // Clear all but header row (first 5 children)
+  while (grid.children.length > 5) grid.removeChild(grid.lastChild);
+
+  const numericCols = columns.filter(col => {
+    const sample = filtered.find(r => typeof r[col] === 'number');
+    return !!sample;
+  });
+
+  // Skip battery/binary columns
+  const skip = new Set(['Outdoor Battery','Basement Battery']);
+
+  for (const col of numericCols) {
+    if (skip.has(col)) continue;
+    let hiVal = -Infinity, loVal = Infinity, hiRow = null, loRow = null;
+    for (const r of filtered) {
+      const v = r[col];
+      if (typeof v !== 'number') continue;
+      if (v > hiVal) { hiVal = v; hiRow = r; }
+      if (v < loVal) { loVal = v; loRow = r; }
+    }
+    if (!hiRow || !loRow) continue;
+
+    const cell = (txt, cls='') => {
+      const d = document.createElement('div');
+      d.className = `rg-cell ${cls}`; d.textContent = txt;
+      return d;
+    };
+    const fmtVal = v => Number.isInteger(v) ? v : v.toFixed(1);
+    const fmtDt  = r => r.ts.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit', hour: 'numeric', hour12: true });
+
+    grid.appendChild(cell(col, 'name'));
+    grid.appendChild(cell(fmtVal(hiVal), 'hi'));
+    grid.appendChild(cell(fmtDt(hiRow), 'date'));
+    grid.appendChild(cell(fmtVal(loVal), 'lo'));
+    grid.appendChild(cell(fmtDt(loRow), 'date'));
+  }
+}
+
+// Also re-render analysis when date range changes
+const origRenderChart = renderChart;
+function renderChartAndAnalysis() {
+  renderChart();
+  if (analysisPanel.classList.contains('visible')) renderActiveView();
+}
+
+// ── Auto-load from server ─────────────────────────────────────────────────
+document.getElementById('auto-load-btn').addEventListener('click', async () => {
+  showLoading(true, 'Fetching CSV list…');
+  await sleep(0);
+  try {
+    const links = await fetch('/api/files').then(r => r.json());
+    if (!links.length) { showLoading(false); fileStatus.textContent = 'No CSVs found on server'; return; }
+
+    const allParsed = []; let cols = null;
+    for (const link of links) {
+      showLoading(true, `Loading ${link}…`);
+      const text = await fetch(link).then(r => r.text());
+      const { headers, rows } = parseCSV(text);
+      if (!cols) cols = headers;
+      allParsed.push(...rows);
+    }
+    allParsed.sort((a, b) => a.ts - b.ts);
+    allRows = allParsed; columns = cols || [];
+    fileStatus.textContent = `${links.length} files · ${allRows.length.toLocaleString()} readings`;
+
+    if (allRows.length) {
+      const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
+      dateFrom = first; dateTo = last;
+      dateFromEl.value = toDateInput(first);
+      dateToEl.value   = toDateInput(last);
+      dataRangeLabel.textContent = `${fmtDate(first)} – ${fmtDate(last)}`;
+    }
+    buildSidebar();
+    showLoading(false);
+    renderChart();
+  } catch (e) {
+    showLoading(false);
+    fileStatus.textContent = `Error: ${e.message}`;
+  }
+});
+
+// ── Thermal analysis ──────────────────────────────────────────────────────
+// Model: house as an RC thermal circuit.
+// Indoor temp lags outdoor with a time constant τ (hours).
+// When HVAC runs, indoor deviates from this natural prediction — that's the signal.
+
+function hourlyAgg(rows, col) {
+  // Average readings into 1-hour buckets
+  const map = new Map();
+  for (const r of rows) {
+    const v = r[col];
+    if (typeof v !== 'number') continue;
+    const key = Math.floor(r.ts.getTime() / 3_600_000);
+    if (!map.has(key)) map.set(key, { sum: 0, n: 0, ts: new Date(key * 3_600_000) });
+    const b = map.get(key); b.sum += v; b.n++;
+  }
+  return [...map.values()].sort((a, b) => a.ts - b.ts).map(b => ({ ts: b.ts, v: b.sum / b.n }));
+}
+
+function pearson(xs, ys) {
+  const n = xs.length;
+  if (n < 3) return NaN;
+  const mx = xs.reduce((s, v) => s + v, 0) / n;
+  const my = ys.reduce((s, v) => s + v, 0) / n;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx, dy = ys[i] - my;
+    sxy += dx * dy; sxx += dx * dx; syy += dy * dy;
+  }
+  return sxy / Math.sqrt(sxx * syy);
+}
+
+function linReg(xs, ys) {
+  const n = xs.length;
+  const mx = xs.reduce((s, v) => s + v, 0) / n;
+  const my = ys.reduce((s, v) => s + v, 0) / n;
+  let sxy = 0, sxx = 0;
+  for (let i = 0; i < n; i++) { sxy += (xs[i] - mx) * (ys[i] - my); sxx += (xs[i] - mx) ** 2; }
+  const slope = sxy / sxx;
+  const intercept = my - slope * mx;
+  return { slope, intercept };
+}
+
+function rollingAvg(arr, windowHrs) {
+  // arr is hourly data; windowHrs is window size
+  const result = [];
+  const half = Math.floor(windowHrs / 2);
+  for (let i = 0; i < arr.length; i++) {
+    const slice = arr.slice(Math.max(0, i - half), Math.min(arr.length, i + half + 1)).map(x => x.v);
+    result.push(slice.reduce((s, v) => s + v, 0) / slice.length);
+  }
+  return result;
+}
+
+function crossCorrAtLags(outdoor, indoor, maxLag) {
+  // Both arrays have .v values, aligned by index (1 index = 1 hour)
+  const outdoorV = outdoor.map(d => d.v);
+  const results = [];
+  for (let lag = 0; lag <= maxLag; lag++) {
+    // outdoor[0..n-lag] vs indoor[lag..n]
+    const n = Math.min(outdoor.length - lag, indoor.length - lag);
+    if (n < 10) break;
+    const xSlice = [], ySlice = [];
+    for (let i = 0; i < n; i++) {
+      const x = outdoor[i].v, y = indoor[i + lag]?.v;
+      if (x != null && y != null) { xSlice.push(x); ySlice.push(y); }
+    }
+    results.push({ lag, r: pearson(xSlice, ySlice) });
+  }
+  return results;
+}
+
+function renderThermal(filtered) {
+  const COL_OUT  = 'Outdoor Temperature (°F)';
+  const COL_OFF  = 'Office Temperature (°F)';
+  const COL_BASE = 'Basement Temperature (°F)';
+
+  if (!columns.includes(COL_OUT) || (!columns.includes(COL_OFF) && !columns.includes(COL_BASE))) return;
+
+  // Aggregate to hourly for efficiency (~8k points max vs ~100k)
+  const outHr  = hourlyAgg(filtered, COL_OUT);
+  const offHr  = columns.includes(COL_OFF)  ? hourlyAgg(filtered, COL_OFF)  : null;
+  const baseHr = columns.includes(COL_BASE) ? hourlyAgg(filtered, COL_BASE) : null;
+
+  const MAX_LAG = 24; // hours
+
+  // ── Cross-correlation at lags 0–24h ──────────────────────────────────
+  const offLags  = offHr  ? crossCorrAtLags(outHr, offHr,  MAX_LAG) : [];
+  const baseLags = baseHr ? crossCorrAtLags(outHr, baseHr, MAX_LAG) : [];
+
+  const bestOffLag  = offLags.length  ? offLags.reduce((b, x)  => x.r > b.r ? x : b)  : null;
+  const bestBaseLag = baseLags.length ? baseLags.reduce((b, x) => x.r > b.r ? x : b) : null;
+
+  // ── HVAC residual (per-space) ─────────────────────────────────────────
+  // 1. Smooth outdoor with 4h rolling avg (removes rapid fluctuations)
+  const outSmooth = rollingAvg(outHr, 4);
+
+  const seasonCfg = loadSeasonConfig();
+  const hasSeasonConfig = seasonCfg.heat.some(([f,t])=>f&&t) || seasonCfg.cool.some(([f,t])=>f&&t);
+
+  function computeResidual(indoorHr, bestLag) {
+    if (!indoorHr || !bestLag) return null;
+    const lag = bestLag.lag;
+    const n   = Math.min(outHr.length - lag, indoorHr.length - lag);
+    const xs  = [], ys = [], ts = [], seasons = [];
+    for (let i = 0; i < n; i++) {
+      const x = outSmooth[i], y = indoorHr[i + lag]?.v;
+      if (x != null && y != null) {
+        xs.push(x); ys.push(y); ts.push(indoorHr[i + lag].ts);
+        seasons.push(hasSeasonConfig ? classifyDate(indoorHr[i + lag].ts, seasonCfg) : null);
+      }
+    }
+
+    let slope, intercept, mask;
+
+    if (hasSeasonConfig) {
+      // Train regression ONLY on passive periods — user-labeled ground truth
+      const pxs = xs.filter((_, i) => seasons[i] === 'passive');
+      const pys = ys.filter((_, i) => seasons[i] === 'passive');
+      if (pxs.length >= 10) {
+        ({ slope, intercept } = linReg(pxs, pys));
+      } else {
+        // Not enough passive data, fall through to RANSAC
+        ({ slope, intercept } = linReg(xs, ys));
+      }
+      mask = seasons.map(s => s === 'passive' ? 1 : 0);
+    } else {
+      // RANSAC-style iterative passive-only regression (fallback when no config)
+      const ITERATIONS = 6;
+      mask = new Uint8Array(xs.length).fill(1);
+      for (let iter = 0; iter < ITERATIONS; iter++) {
+        const pxs = xs.filter((_, i) => mask[i]);
+        const pys = ys.filter((_, i) => mask[i]);
+        if (pxs.length < 10) break;
+        ({ slope, intercept } = linReg(pxs, pys));
+        const resAll = xs.map((x, i) => ys[i] - (slope * x + intercept));
+        const passiveRes = resAll.filter((_, i) => mask[i]);
+        const sorted = [...passiveRes].sort((a, b) => a - b);
+        const q1 = sorted[Math.floor(sorted.length * 0.25)];
+        const q3 = sorted[Math.floor(sorted.length * 0.75)];
+        const fence = Math.max(1.5, (q3 - q1) * 1.5);
+        mask = new Uint8Array(resAll.map(r => Math.abs(r) <= fence ? 1 : 0));
+      }
+    }
+
+    const residuals = xs.map((x, i) => ({
+      ts: ts[i],
+      r: ys[i] - (slope * x + intercept),
+      season: seasons[i], // 'heat' | 'cool' | 'passive' | null
+    }));
+
+    // Threshold from IQR of passive residuals
+    const passiveR = residuals.filter((_, i) => (mask[i] === 1 || mask[i] === true)).map(d => d.r);
+    const ps = [...passiveR].sort((a, b) => a - b);
+    const pq1 = ps[Math.floor(ps.length * 0.25)];
+    const pq3 = ps[Math.floor(ps.length * 0.75)];
+    const threshold = Math.max(1.0, (pq3 - pq1) * 1.5);
+    return { residuals, slope, intercept, threshold };
+  }
+
+  const offRes  = computeResidual(offHr,  bestOffLag);
+  const baseRes = computeResidual(baseHr, bestBaseLag);
+
+  // ── Summary cards ─────────────────────────────────────────────────────
+  const summaryEl = document.getElementById('thermal-summary');
+  summaryEl.innerHTML = '';
+
+  function card(title, stats) {
+    const el = document.createElement('div');
+    el.className = 'thermal-card';
+    el.innerHTML = `<div class="thermal-card-title">${title}</div>` +
+      stats.map(([label, val, cls]) =>
+        `<div class="thermal-card-stat"><span>${label}</span><b class="${cls||''}">${val}</b></div>`
+      ).join('');
+    summaryEl.appendChild(el);
+  }
+
+  // When season config is active: heat residuals only count in heating periods,
+  // cool residuals only in cooling periods, and passive periods flag neither.
+  const isHeat = (pt, threshold) => pt.r > threshold  && (!hasSeasonConfig || pt.season === 'heat');
+  const isCool = (pt, threshold) => pt.r < -threshold && (!hasSeasonConfig || pt.season === 'cool');
+
+  if (bestOffLag && offRes) {
+    const coupling = (offRes.slope * 100).toFixed(0);
+    const thr = offRes.threshold;
+    card('🟢 Office vs Outdoor', [
+      ['Best lag', `${bestOffLag.lag}h`, ''],
+      ['Correlation (r)', bestOffLag.r.toFixed(3), ''],
+      ['Thermal coupling', `${coupling}%`, ''],
+      ['HVAC threshold', `±${thr.toFixed(1)}°F`, ''],
+      ['Heat events detected', offRes.residuals.filter(pt => isHeat(pt, thr)).length, 'hvac-heat'],
+      ['Cool events detected', offRes.residuals.filter(pt => isCool(pt, thr)).length, 'hvac-cool'],
+    ]);
+  }
+  if (bestBaseLag && baseRes) {
+    const coupling = (baseRes.slope * 100).toFixed(0);
+    const thr = baseRes.threshold;
+    card('🔵 Basement vs Outdoor', [
+      ['Best lag', `${bestBaseLag.lag}h`, ''],
+      ['Correlation (r)', bestBaseLag.r.toFixed(3), ''],
+      ['Thermal coupling', `${coupling}%`, ''],
+      ['HVAC threshold', `±${thr.toFixed(1)}°F`, ''],
+      ['Heat events detected', baseRes.residuals.filter(pt => isHeat(pt, thr)).length, 'hvac-heat'],
+      ['Cool events detected', baseRes.residuals.filter(pt => isCool(pt, thr)).length, 'hvac-cool'],
+    ]);
+  }
+
+  // Interpretation card
+  card('📖 What this means', [
+    ['Model', hasSeasonConfig ? 'passive-season fit' : 'RANSAC estimate', ''],
+    ['Lag', 'hours outdoor→indoor', ''],
+    ['Coupling', 'indoor °F per outdoor °F', ''],
+    ['+residual', 'heater signature', 'hvac-heat'],
+    ['−residual', 'A/C signature', 'hvac-cool'],
+  ]);
+
+  // ── Narrative interpretation cards ───────────────────────────────────
+  function interpCard(title, res, bestLag, heatCt, coolCt) {
+    if (!res || !bestLag) return;
+    const lag = bestLag.lag;
+    const r   = bestLag.r;
+    const coupling = res.slope * 100;
+    const thr = res.threshold;
+
+    // Qualitative descriptors
+    const lagDesc = lag <= 2  ? 'very fast — well-coupled to outdoor air'
+                  : lag <= 6  ? 'moderate — some thermal buffering'
+                  : lag <= 12 ? 'slow — well-insulated or partially underground'
+                  :             'very slow — thermally decoupled (typical basement)';
+    const rDesc   = r >= 0.7  ? `<span class="good">strong (r=${r.toFixed(3)})</span> — outdoor temp is the dominant driver`
+                  : r >= 0.4  ? `<span class="warn">moderate (r=${r.toFixed(3)})</span> — outdoor temp has meaningful influence`
+                  : r >= 0.15 ? `<span class="warn">weak (r=${r.toFixed(3)})</span> — other factors dominate`
+                  :             `<span class="lo">near-zero (r=${r.toFixed(3)})</span> — essentially thermally decoupled`;
+    const coupDesc = Math.abs(coupling) >= 50
+                  ? `<span class="warn">${coupling.toFixed(0)}%</span> — high: each 10°F outdoor → ${(coupling/10).toFixed(1)}°F indoor`
+                  : Math.abs(coupling) >= 20
+                  ? `<span class="good">${coupling.toFixed(0)}%</span> — each 10°F outdoor → ${(coupling/10).toFixed(1)}°F indoor`
+                  : `<span class="lo">${coupling.toFixed(0)}%</span> — very low; space is well-buffered from outdoor swings`;
+
+    const el = document.createElement('div');
+    el.className = 'interp-card';
+    el.innerHTML = `<div class="interp-card-title">${title}</div><ul>
+      <li><b>${lag}h thermal lag</b> — ${lagDesc}</li>
+      <li><b>Correlation</b> ${rDesc}</li>
+      <li><b>Thermal coupling</b> ${coupDesc}</li>
+      <li><b>Detection threshold</b> ±${thr.toFixed(1)}°F residual</li>
+      <li><span class="hi">🔥 ${heatCt} heat hours</span> detected in heating season</li>
+      <li><span class="lo">❄ ${coolCt} cool hours</span> detected in cooling season</li>
+    </ul>`;
+    summaryEl.appendChild(el);
+  }
+
+  if (bestOffLag && offRes) {
+    const thr = offRes.threshold;
+    interpCard('🟢 Office — interpretation', offRes, bestOffLag,
+      offRes.residuals.filter(pt => isHeat(pt, thr)).length,
+      offRes.residuals.filter(pt => isCool(pt, thr)).length);
+  }
+  if (bestBaseLag && baseRes) {
+    const thr = baseRes.threshold;
+    interpCard('🔵 Basement — interpretation', baseRes, bestBaseLag,
+      baseRes.residuals.filter(pt => isHeat(pt, thr)).length,
+      baseRes.residuals.filter(pt => isCool(pt, thr)).length);
+  }
+
+  // ── Lag correlation chart ─────────────────────────────────────────────
+  const lagTraces = [];
+  if (offLags.length)  lagTraces.push({ x: offLags.map(d => d.lag),  y: offLags.map(d => d.r),  name: 'Office',   type: 'scatter', mode: 'lines+markers', line: { color: '#22c55e', width: 2 }, marker: { size: 5 } });
+  if (baseLags.length) lagTraces.push({ x: baseLags.map(d => d.lag), y: baseLags.map(d => d.r), name: 'Basement', type: 'scatter', mode: 'lines+markers', line: { color: '#60a5fa', width: 2 }, marker: { size: 5 } });
+
+  const lagLayout = {
+    paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
+    font: { color: '#e2e6f0', size: 10 },
+    margin: { t: 30, r: 10, b: 40, l: 40 },
+    title: { text: 'Lag correlation (hours)', font: { size: 11, color: '#7b82a0' }, y: 0.97 },
+    xaxis: { title: { text: 'Lag (hours)', standoff: 4 }, gridcolor: '#2e3245', linecolor: '#2e3245', dtick: 4 },
+    yaxis: { title: { text: 'r', standoff: 4 }, gridcolor: '#2e3245', linecolor: '#2e3245',
+      range: [Math.min(-0.25, Math.floor(Math.min(...[...offLags, ...baseLags].map(d => d.r)) / 0.25) * 0.25), 1],
+      zeroline: true, zerolinecolor: '#ffffff33', zerolinewidth: 1 },
+    legend: { bgcolor: '#0f111700', font: { size: 10 }, orientation: 'h', y: -0.3 },
+    hovermode: 'x unified',
+  };
+  Plotly.react(document.getElementById('thermal-lag-chart'), lagTraces, lagLayout,
+    { responsive: true, displaylogo: false, displayModeBar: false });
+
+  // ── HVAC residual time series ─────────────────────────────────────────
+  const resTraces = [];
+  function addResTrace(res, label, heatColor, coolColor) {
+    if (!res) return;
+    const thr = res.threshold;
+    const posX = [], posY = [], negX = [], negY = [], zeroX = [], zeroY = [];
+    for (const pt of res.residuals) {
+      const { ts, r } = pt;
+      if (isHeat(pt, thr))   { posX.push(ts); posY.push(r); }
+      else if (isCool(pt, thr)) { negX.push(ts); negY.push(r); }
+      else { zeroX.push(ts); zeroY.push(r); }
+    }
+    resTraces.push({
+      x: zeroX, y: zeroY, name: `${label} neutral`,
+      type: 'scatter', mode: 'lines', line: { color: '#ffffff22', width: 1 },
+      showlegend: false, hoverinfo: 'skip',
+    });
+    resTraces.push({
+      x: posX, y: posY, name: `${label} 🔥 heat`,
+      type: 'scatter', mode: 'markers', marker: { color: heatColor, size: 3, opacity: 0.7 },
+    });
+    resTraces.push({
+      x: negX, y: negY, name: `${label} ❄ cool`,
+      type: 'scatter', mode: 'markers', marker: { color: coolColor, size: 3, opacity: 0.7 },
+    });
+  }
+  addResTrace(offRes,  'Office',   '#f97316', '#38bdf8');
+  addResTrace(baseRes, 'Basement', '#fb923c', '#60a5fa');
+
+  const resLayout = {
+    paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
+    font: { color: '#e2e6f0', size: 10 },
+    margin: { t: 30, r: 10, b: 40, l: 50 },
+    title: { text: 'HVAC residual — positive=heat, negative=cool', font: { size: 11, color: '#7b82a0' }, y: 0.97 },
+    xaxis: { type: 'date', gridcolor: '#2e3245', linecolor: '#2e3245' },
+    yaxis: { title: { text: 'Residual °F', standoff: 4 }, gridcolor: '#2e3245', linecolor: '#2e3245', zeroline: true, zerolinecolor: '#ffffff33' },
+    legend: { bgcolor: '#0f111700', font: { size: 10 }, orientation: 'h', y: -0.3 },
+    hovermode: 'closest',
+    shapes: [{ type: 'line', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 1.5, y1: 1.5, line: { color: '#f9731633', width: 1, dash: 'dot' } },
+             { type: 'line', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: -1.5, y1: -1.5, line: { color: '#60a5fa33', width: 1, dash: 'dot' } }],
+  };
+  Plotly.react(document.getElementById('thermal-residual-chart'), resTraces, resLayout,
+    { responsive: true, displaylogo: false, displayModeBar: false });
+
+  // ── Scatter phase plot: outdoor (lagged) vs indoor ────────────────────
+  const scatterTraces = [];
+  function addScatterTrace(indoorHr, res, bestLag, label, heatColor, coolColor, neutralColor) {
+    if (!indoorHr || !res || !bestLag) return;
+    const lag = bestLag.lag;
+    const hx = [], hy = [], cx = [], cy = [], nx = [], ny = [];
+    const n = Math.min(outHr.length - lag, indoorHr.length - lag);
+    for (let i = 0; i < n; i++) {
+      const x = outSmooth[i], y = indoorHr[i + lag]?.v;
+      const pt = res.residuals[i];
+      if (x == null || y == null || !pt) continue;
+      if (isHeat(pt, res.threshold)) { hx.push(x); hy.push(y); }
+      else if (isCool(pt, res.threshold)) { cx.push(x); cy.push(y); }
+      else { nx.push(x); ny.push(y); }
+    }
+    // Regression line
+    const allX = [...nx, ...hx, ...cx], allY = [...ny, ...hy, ...cy];
+    const { slope, intercept } = linReg(allX, allY);
+    const minX = Math.min(...allX), maxX = Math.max(...allX);
+    scatterTraces.push({ x: nx, y: ny, name: `${label} neutral`, type: 'scattergl', mode: 'markers',
+      marker: { color: neutralColor, size: 2, opacity: 0.3 }, showlegend: false, hoverinfo: 'skip' });
+    scatterTraces.push({ x: hx, y: hy, name: `${label} 🔥`, type: 'scattergl', mode: 'markers',
+      marker: { color: heatColor, size: 3, opacity: 0.6 } });
+    scatterTraces.push({ x: cx, y: cy, name: `${label} ❄`, type: 'scattergl', mode: 'markers',
+      marker: { color: coolColor, size: 3, opacity: 0.6 } });
+    scatterTraces.push({ x: [minX, maxX], y: [slope * minX + intercept, slope * maxX + intercept],
+      name: `${label} fit`, type: 'scatter', mode: 'lines',
+      line: { color: neutralColor, width: 1.5, dash: 'dash' }, showlegend: false });
+  }
+  addScatterTrace(offHr,  offRes,  bestOffLag,  'Office',   '#f97316', '#38bdf8', '#22c55e');
+  addScatterTrace(baseHr, baseRes, bestBaseLag, 'Basement', '#fb923c', '#60a5fa', '#a78bfa');
+
+  const scatterLayout = {
+    paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
+    font: { color: '#e2e6f0', size: 10 },
+    margin: { t: 30, r: 10, b: 40, l: 50 },
+    title: { text: 'Thermal phase: outdoor (lagged) vs indoor °F', font: { size: 11, color: '#7b82a0' }, y: 0.97 },
+    xaxis: { title: { text: 'Outdoor °F (lagged)', standoff: 4 }, gridcolor: '#2e3245', linecolor: '#2e3245' },
+    yaxis: { title: { text: 'Indoor °F', standoff: 4 }, gridcolor: '#2e3245', linecolor: '#2e3245' },
+    legend: { bgcolor: '#0f111700', font: { size: 10 }, orientation: 'h', y: -0.3 },
+    hovermode: 'closest',
+  };
+  Plotly.react(document.getElementById('thermal-scatter-chart'), scatterTraces, scatterLayout,
+    { responsive: true, displaylogo: false, displayModeBar: false });
+
+  // ── Monthly HVAC activity chart ───────────────────────────────────────
+  function monthlyHvac(res) {
+    if (!res) return [];
+    const heat = {}, cool = {};
+    for (const pt of res.residuals) {
+      const { ts } = pt;
+      const key = `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, '0')}`;
+      if (isHeat(pt, res.threshold)) { heat[key] = (heat[key] || 0) + 1; }
+      if (isCool(pt, res.threshold)) { cool[key] = (cool[key] || 0) + 1; }
+    }
+    const months = [...new Set([...Object.keys(heat), ...Object.keys(cool)])].sort();
+    return { months, heatCounts: months.map(m => heat[m] || 0), coolCounts: months.map(m => -(cool[m] || 0)) };
+  }
+  const offMonthly  = monthlyHvac(offRes);
+  const baseMonthly = monthlyHvac(baseRes);
+  const allMonths   = [...new Set([...(offMonthly.months || []), ...(baseMonthly.months || [])])].sort();
+
+  const monthlyTraces = [];
+  if (offMonthly.months) {
+    monthlyTraces.push({ x: offMonthly.months, y: offMonthly.heatCounts, name: 'Office 🔥 heat',
+      type: 'bar', marker: { color: '#f97316cc' } });
+    monthlyTraces.push({ x: offMonthly.months, y: offMonthly.coolCounts, name: 'Office ❄ cool',
+      type: 'bar', marker: { color: '#38bdf8cc' } });
+  }
+  if (baseMonthly.months) {
+    monthlyTraces.push({ x: baseMonthly.months, y: baseMonthly.heatCounts, name: 'Basement 🔥 heat',
+      type: 'bar', marker: { color: '#fb923c66' } });
+    monthlyTraces.push({ x: baseMonthly.months, y: baseMonthly.coolCounts, name: 'Basement ❄ cool',
+      type: 'bar', marker: { color: '#60a5fa66' } });
+  }
+
+  const monthlyLayout = {
+    paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
+    font: { color: '#e2e6f0', size: 10 },
+    margin: { t: 30, r: 10, b: 50, l: 50 },
+    title: { text: 'Monthly HVAC activity (heat ▲ / cool ▼ event hours)', font: { size: 11, color: '#7b82a0' }, y: 0.97 },
+    barmode: 'group',
+    xaxis: { gridcolor: '#2e3245', linecolor: '#2e3245', tickangle: -45 },
+    yaxis: { gridcolor: '#2e3245', linecolor: '#2e3245', zeroline: true, zerolinecolor: '#ffffff44',
+      tickformat: 'd', title: { text: 'Hours', standoff: 4 } },
+    legend: { bgcolor: '#0f111700', font: { size: 10 }, orientation: 'h', y: -0.45 },
+    hovermode: 'x unified',
+    shapes: [{ type: 'line', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 0, y1: 0,
+      line: { color: '#ffffff33', width: 1 } }],
+  };
+  Plotly.react(document.getElementById('thermal-monthly-chart'), monthlyTraces, monthlyLayout,
+    { responsive: true, displaylogo: false, displayModeBar: false });
+}
+
+// ── Utils ────────────────────────────────────────────────────────────────
+function showLoading(v, msg = 'Processing…') {
+  loadingEl.style.display = v ? 'flex' : 'none';
+  loadingMsg.textContent  = msg;
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function toDateInput(d) { return d.toISOString().slice(0, 10); }
+function fmtDate(d) {
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+</script>
+</body>
+</html>
