@@ -1,5 +1,6 @@
 # Weather data files (personal data, not part of the app)
 *.csv
+!sample-data.csv
 
 # Alexa poller credentials and database
 alexa-poller/config.json

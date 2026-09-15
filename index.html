@@ -598,6 +598,7 @@
       </svg>
       <p>No data to display</p>
       <small>Load CSV files and select at least one series</small>
+      <button class="btn primary" id="sample-data-btn" style="margin-top:12px">Load Sample Data</button>
     </div>
     <div id="chart" style="display:none"></div>
     <div id="stats-bar" style="display:none"></div>
@@ -858,6 +859,34 @@ function readFile(f) {
     r.readAsText(f);
   });
 }
+
+// ── Sample Data ──────────────────────────────────────────────────────────
+document.getElementById('sample-data-btn').addEventListener('click', async () => {
+  showLoading(true, 'Loading sample data…');
+  await sleep(0);
+  try {
+    const res = await fetch('sample-data.csv');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    const { headers, rows } = parseCSV(text);
+    rows.sort((a, b) => a.ts - b.ts);
+    allRows = rows; columns = headers;
+    fileStatus.textContent = `Sample data (Aug 2026) · ${allRows.length.toLocaleString()} readings`;
+    if (allRows.length) {
+      const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
+      dateFrom = first; dateTo = last;
+      dateFromEl.value = toDateInput(first);
+      dateToEl.value   = toDateInput(last);
+      dataRangeLabel.textContent = `${fmtDate(first)} – ${fmtDate(last)}`;
+    }
+    buildSidebar();
+    showLoading(false);
+    renderChart();
+  } catch (e) {
+    showLoading(false);
+    fileStatus.textContent = `Could not load sample data: ${e.message}`;
+  }
+});
 
 // ── Sidebar ─────────────────────────────────────────────────────────────
 function buildSidebar() {
