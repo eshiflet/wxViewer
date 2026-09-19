@@ -73,9 +73,38 @@ CSV files must have a header row. The first column should be a date/time field. 
 
 ---
 
-## Alexa thermostat integration *(optional)*
+## HVAC monitoring
 
-The `alexa-poller/` directory contains a Python script that polls an Amazon Smart Thermostat via the Alexa Smart Home API every 5 minutes and logs HVAC state to a local SQLite database. See [`alexa-poller/SETUP.md`](alexa-poller/SETUP.md) for setup instructions.
+The Thermal Analysis panel currently *infers* when heating and cooling ran, from
+deviations against the passive thermal model. Real HVAC on/off state would be better
+ground truth — it would let the model train on labeled data rather than a RANSAC
+estimate.
+
+### Amazon Smart Thermostat — not possible
+
+The `alexa-poller/` directory holds an abandoned attempt to read HVAC state from an
+Amazon Smart Thermostat via the Alexa API. **It does not work and cannot be made to
+work.**
+
+The HVAC running-state properties (`primaryHeaterOperation`, `coolerOperation`) belong to
+an interface that device manufacturers implement to report *to* Alexa for its energy
+dashboard. There is no direction in which a consumer reads them back out, and Amazon
+publishes no consumer API for thermostat state at all. The Home Assistant community hit
+the same wall — there is no HA integration for this thermostat, for this reason.
+
+The code is kept only as a record. See [`alexa-poller/SETUP.md`](alexa-poller/SETUP.md)
+for the full findings.
+
+### CT clamps — the working alternative
+
+Measuring the HVAC circuits directly sidesteps the vendor entirely: a current transformer
+clamp around the condenser and air handler conductors reports actual draw, which gives
+unambiguous on/off state and, from the magnitude, which stage is running.
+
+Nothing is wired up yet. Note that connecting such a feed will need a change to the CSV
+loader: it currently concatenates rows from every file and takes its column set from the
+first file only, so a second CSV of HVAC readings would need to be joined on timestamp
+rather than appended.
 
 ---
 

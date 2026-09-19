@@ -1,154 +1,114 @@
-# Alexa Thermostat Poller — Setup Guide
+# Alexa Thermostat Poller — Does Not Work
 
-## What this does
+**Status: abandoned. The code in this directory is non-functional and kept only as a record.**
 
-Polls your Amazon Smart Thermostat every 5 minutes via the Alexa Smart Home API
-and saves the data to `hvac_data.db` (SQLite). Captures:
+This was an attempt to poll an Amazon Smart Thermostat every 5 minutes and log real
+HVAC on/off state to SQLite, so that wxViewer's Thermal Analysis panel could train on
+labeled ground truth instead of inferring HVAC activity from the passive thermal model.
 
-- Current temperature (°F)
-- Thermostat mode (HEAT / COOL / AUTO / OFF)
-- Target setpoint(s)
-- **Whether heating/cooling is actually running** (`primaryHeaterOperation`, `coolerOperation`, etc.)
-- Adaptive recovery status (pre-heating / pre-cooling)
+It cannot work. Not because of a bug — because Amazon does not expose the data.
 
 ---
 
-## Step 0 — Install dependencies
+## Why it can't work
 
-```bash
-cd /Users/eric/Desktop/Weather/alexa-poller
-pip install requests
+### 1. The HVAC data flows the wrong direction
+
+The fields this poller was built to capture — `primaryHeaterOperation`,
+`coolerOperation`, `auxiliaryHeaterOperation`, `fanOperation` — belong to the
+[`Alexa.ThermostatController.HVAC.Components`][hvac] interface.
+
+That interface is implemented *by a device maker's cloud, reporting **to** Alexa*, so
+Alexa can populate its energy dashboard. The manufacturer answers `ReportState`
+directives and sends proactive `ChangeReport` events. Nothing reads those properties
+back out. There is no query direction.
+
+This is the fatal one. No amount of fixing the other three problems gets around it.
+
+### 2. `poll.py` targets an enterprise API
+
+`ASP_BASE = "https://api.amazonalexa.com"` with `GET /v2/endpoints` is the
+[Alexa Smart Properties][asp] Endpoint API — Amazon's commercial product for
+hospitality, senior living, and healthcare properties.
+
+Using it requires an Amazon Business account, onboarding through Amazon's Business
+Development team, and an issued organization identifier (`amzn1.alexa.unit.did.{id}`).
+A personal Amazon account — the one your thermostat is actually registered to — cannot
+reach it.
+
+### 3. `auth.py` and `poll.py` disagree about which API they're for
+
+`auth.py` requests these scopes:
+
+```
+alexa::smarthome:devices:read
+alexa::smarthome:guest:skill:invokeAlexa
 ```
 
----
+Alexa Smart Properties requires an entirely different set:
 
-## Step 1 — Create an Amazon Security Profile (one time, ~5 min)
-
-1. Go to https://developer.amazon.com and sign in with **the same Amazon account
-   your thermostat is registered to**.
-
-2. Click **Developer Console → Login with Amazon**.
-
-3. Click **Create a New Security Profile**.
-   - Profile Name: `Thermostat Poller` (anything works)
-   - Description: anything
-   - Privacy URL: `https://example.com` (placeholder is fine)
-   - Click **Save**
-
-4. On your new profile, click **Show Client ID and Client Secret**.
-   Copy both values — you'll paste them in the next step.
-
-5. Click the **Web Settings** tab.
-   - Under **Allowed Return URLs**, add: `http://localhost:9876/callback`
-   - Click **Save**
-
----
-
-## Step 2 — Authorize (one time, ~2 min)
-
-```bash
-python auth.py
+```
+alexa::enterprise:management
+credential_locker::wifi_management
+profile:user_id
 ```
 
-This will:
-- Ask for your Client ID and Client Secret (from Step 1)
-- Open your browser to Amazon's login page
-- You log in and click "Allow"
-- Amazon redirects back, the script captures the token and saves `config.json`
+So even with an entitled business account, the token `auth.py` produces is not one
+`poll.py`'s endpoint accepts. The OAuth flow would appear to succeed and every poll
+would then fail authorization.
 
-`config.json` holds your refresh token — keep it private, don't commit it anywhere.
+### 4. Two of the three polled feature names don't exist
 
----
+`poll.py` requests `thermostat`, `temperature`, and `thermostatHvacComponents`.
 
-## Step 3 — Run the poller
+The [documented feature names][features] are `bluetooth`, `brightness`, `color`,
+`colorTemperature`, `connectivity`, `power`, `speaker`, `temperatureSensor`, and
+`thermostat`. Only the first of the three is real; `temperature` should have been
+`temperatureSensor`, and `thermostatHvacComponents` was invented.
 
-```bash
-# Run continuously, poll every 5 minutes (default)
-python poll.py
-
-# Poll every 1 minute
-python poll.py --interval 1
-
-# Single poll (for cron)
-python poll.py --once
-```
+Worse, `get_thermostat_features()` swallows a 404 into `log.debug`, so these would have
+produced permanently empty columns and a log line invisible at the default level. The
+failure mode would have read as "my thermostat doesn't report this" rather than "I asked
+for a field that never existed."
 
 ---
 
-## Step 4 (optional) — Run as a background service with launchd
+## Is there any other way to read an Amazon Smart Thermostat?
 
-Create `/Library/LaunchAgents/com.weather.alexa-poller.plist`:
+Not officially. Amazon publishes no consumer API for thermostat state. The Home
+Assistant community [reached the same conclusion independently][ha] — there is no HA
+integration for it, for this reason.
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.weather.alexa-poller</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/bin/python3</string>
-        <string>/Users/eric/Desktop/Weather/alexa-poller/poll.py</string>
-        <string>--once</string>
-    </array>
-    <key>StartInterval</key>
-    <integer>300</integer>  <!-- 300 seconds = 5 minutes -->
-    <key>StandardOutPath</key>
-    <string>/Users/eric/Desktop/Weather/alexa-poller/poller.log</string>
-    <key>StandardErrorPath</key>
-    <string>/Users/eric/Desktop/Weather/alexa-poller/poller.log</string>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>
-```
-
-Then load it:
-```bash
-launchctl load ~/Library/LaunchAgents/com.weather.alexa-poller.plist
-```
+The one known workaround is [`homebridge-alexa-smarthome`][homebridge], which proxies an
+Amazon login to capture a session cookie (valid ~14 days, auto-refreshed) and exposes
+Alexa-linked devices to HomeKit. It is unofficial, breaks when Amazon changes anything,
+and it is unclear whether it surfaces true compressor/blower running state as opposed to
+just mode and current temperature.
 
 ---
 
-## Querying the data
+## What to do instead
 
-The SQLite database has one table: `thermostat_readings`.
+Measure the HVAC directly rather than asking Amazon about it.
 
-```bash
-sqlite3 hvac_data.db
+A current transformer (CT) clamp on the air handler and condenser circuits reports actual
+electrical draw, which gives unambiguous on/off state — and, from the magnitude of the
+draw, which stage is running. That is strictly better ground truth than anything the
+thermostat would have reported, and it involves no cloud API, no OAuth, and no vendor
+that can revoke access.
 
-# Latest reading
-SELECT ts, thermostat_mode, current_temp_f, target_setpoint_f,
-       primary_heater_op, cooler_op, fan_op
-FROM thermostat_readings ORDER BY ts DESC LIMIT 1;
-
-# All times heat was running today
-SELECT ts, primary_heater_op, current_temp_f
-FROM thermostat_readings
-WHERE date(ts) = date('now')
-  AND primary_heater_op != 'OFF'
-  AND primary_heater_op IS NOT NULL;
-
-# Export to CSV
-.mode csv
-.output hvac_export.csv
-SELECT * FROM thermostat_readings;
-```
+See the **HVAC monitoring** section of the main [README](../README.md).
 
 ---
 
-## Notes on HVAC running state
+## The code in this directory
 
-The `primaryHeaterOperation` and `coolerOperation` columns will show:
-- `OFF` — not running
-- `STAGE_1` — running at low capacity
-- `STAGE_2` / `STAGE_3` — higher stages (if your system supports multi-stage)
+`auth.py` and `poll.py` are retained so this write-up can point at specific lines. They
+have never been run successfully and should not be. There is no `config.json` and no
+`hvac_data.db`, and none will be produced.
 
-`auxiliaryHeaterOperation` will be `ON` or `OFF` (for heat pump aux/emergency heat).
-
-**If these columns stay NULL**, the Amazon Smart Thermostat may not expose the
-HVAC.Components interface to the consumer API — it's primarily designed for
-manufacturers to push data TO Alexa. If that's the case, you can still infer
-HVAC activity from `thermostatMode` + the gap between `current_temp_f` and
-`target_setpoint_f` narrowing over time.
+[hvac]: https://developer.amazon.com/en-US/docs/alexa/device-apis/alexa-thermostatcontroller-hvac-components.html
+[asp]: https://developer.amazon.com/en-US/docs/alexa/alexa-smart-properties/get-started.html
+[features]: https://developer.amazon.com/en-US/docs/alexa/alexa-smart-properties/endpoint-features-api.html
+[ha]: https://community.home-assistant.io/t/pass-amazon-smart-thermostat-info-to-ha/720795
+[homebridge]: https://github.com/joeyhage/homebridge-alexa-smarthome
