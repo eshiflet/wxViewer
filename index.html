@@ -814,6 +814,34 @@
 </div>
 
 <script>
+// ── Chart chrome ────────────────────────────────────────────────────────
+// Every plot sits on the same dark surface with the same grid and text
+// colours. These are the only places those values are written down.
+const PLOT_BG    = '#0f1117';   // plot + paper background
+const PLOT_PANEL = '#1a1d27';   // legend / hover / rangeslider fill
+const PLOT_GRID  = '#2e3245';   // gridlines, axis lines, borders
+const PLOT_TEXT  = '#e2e6f0';   // tick and legend text
+const PLOT_LABEL = '#7b82a0';   // chart titles
+
+// An axis with the standard grid colours, plus whatever the caller adds.
+const plotAxis = (extra = {}) => ({ gridcolor: PLOT_GRID, linecolor: PLOT_GRID, ...extra });
+
+// The four thermal charts share one chrome: same surface, same 10px text,
+// same title treatment, same horizontal legend beneath the plot. `margin` and
+// `legendY` are the only parts that vary between them; everything else a
+// chart needs — axes, hovermode, shapes — comes through `extra`.
+function thermalLayout(title, { margin = { t: 30, r: 10, b: 40, l: 50 },
+                                legendY = -0.3, ...extra } = {}) {
+  return {
+    paper_bgcolor: PLOT_BG, plot_bgcolor: PLOT_BG,
+    font: { color: PLOT_TEXT, size: 10 },
+    margin,
+    title: { text: title, font: { size: 11, color: PLOT_LABEL }, y: 0.97 },
+    legend: { bgcolor: `${PLOT_BG}00`, font: { size: 10 }, orientation: 'h', y: legendY },
+    ...extra,
+  };
+}
+
 // ── Palette ─────────────────────────────────────────────────────────────
 // The first 30 are hand-picked and stay fixed so familiar series keep their
 // familiar colour. Past that the palette GROWS ON DEMAND instead of wrapping:
@@ -1526,24 +1554,24 @@ function renderChart() {
 
   // ── Layout ────────────────────────────────────────────────────────
   const layout = {
-    paper_bgcolor: '#0f1117',
-    plot_bgcolor:  '#0f1117',
-    font: { color: '#e2e6f0', family: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', size: 11 },
+    paper_bgcolor: PLOT_BG,
+    plot_bgcolor:  PLOT_BG,
+    font: { color: PLOT_TEXT, family: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', size: 11 },
     margin: { t: 16, r: 16, b: 50, l: 56 },
     legend: {
-      bgcolor: '#1a1d27', bordercolor: '#2e3245', borderwidth: 1,
+      bgcolor: PLOT_PANEL, bordercolor: PLOT_GRID, borderwidth: 1,
       orientation: 'h', x: 0, y: -0.15, xanchor: 'left',
     },
     xaxis: {
       type: 'date',
-      gridcolor: '#2e3245', linecolor: '#2e3245', tickcolor: '#2e3245',
-      rangeslider: { visible: true, bgcolor: '#1a1d27', bordercolor: '#2e3245', thickness: 0.04 },
+      gridcolor: PLOT_GRID, linecolor: PLOT_GRID, tickcolor: PLOT_GRID,
+      rangeslider: { visible: true, bgcolor: PLOT_PANEL, bordercolor: PLOT_GRID, thickness: 0.04 },
     },
     yaxis: {
-      gridcolor: '#2e3245', linecolor: '#2e3245', tickcolor: '#2e3245', zeroline: false,
+      gridcolor: PLOT_GRID, linecolor: PLOT_GRID, tickcolor: PLOT_GRID, zeroline: false,
     },
     hovermode: 'x unified',
-    hoverlabel: { bgcolor: '#1a1d27', bordercolor: '#2e3245', font: { color: '#e2e6f0', size: 11 } },
+    hoverlabel: { bgcolor: PLOT_PANEL, bordercolor: PLOT_GRID, font: { color: PLOT_TEXT, size: 11 } },
   };
 
   const config = {
@@ -1938,29 +1966,29 @@ function renderWindRose(filtered) {
   }));
 
   const layout = {
-    paper_bgcolor: '#0f1117',
-    plot_bgcolor:  '#0f1117',
-    font: { color: '#e2e6f0', size: 11 },
+    paper_bgcolor: PLOT_BG,
+    plot_bgcolor:  PLOT_BG,
+    font: { color: PLOT_TEXT, size: 11 },
     margin: { t: 20, r: 20, b: 20, l: 20 },
     polar: {
-      bgcolor: '#1a1d27',
+      bgcolor: PLOT_PANEL,
       radialaxis: {
         ticksuffix: '%', angle: 45, dtick: 5,
-        gridcolor: '#2e3245', linecolor: '#2e3245',
-        tickcolor: '#2e3245', tickfont: { size: 9 },
+        gridcolor: PLOT_GRID, linecolor: PLOT_GRID,
+        tickcolor: PLOT_GRID, tickfont: { size: 9 },
       },
       angularaxis: {
         direction: 'clockwise',
-        gridcolor: '#2e3245', linecolor: '#2e3245',
+        gridcolor: PLOT_GRID, linecolor: PLOT_GRID,
       },
     },
     legend: {
-      bgcolor: '#1a1d2700', font: { size: 10 },
+      bgcolor: `${PLOT_PANEL}00`, font: { size: 10 },
       orientation: 'v', x: 1.05,
     },
     title: {
       text: `Wind rose · ${total.toLocaleString()} readings`,
-      font: { size: 12, color: '#7b82a0' }, y: 0.98,
+      font: { size: 12, color: PLOT_LABEL }, y: 0.98,
     },
   };
 
@@ -2015,24 +2043,24 @@ function renderDiurnal(filtered) {
   });
 
   const layout = {
-    paper_bgcolor: '#0f1117',
-    plot_bgcolor:  '#0f1117',
-    font: { color: '#e2e6f0', size: 11 },
+    paper_bgcolor: PLOT_BG,
+    plot_bgcolor:  PLOT_BG,
+    font: { color: PLOT_TEXT, size: 11 },
     margin: { t: 30, r: 20, b: 40, l: 50 },
     title: {
       text: `Average ${col} by hour of day`,
-      font: { size: 12, color: '#7b82a0' }, y: 0.97,
+      font: { size: 12, color: PLOT_LABEL }, y: 0.97,
     },
     xaxis: {
       title: { text: 'Hour (local)', standoff: 6 },
-      gridcolor: '#2e3245', linecolor: '#2e3245',
+      gridcolor: PLOT_GRID, linecolor: PLOT_GRID,
     },
     yaxis: {
-      gridcolor: '#2e3245', linecolor: '#2e3245', zeroline: false,
+      gridcolor: PLOT_GRID, linecolor: PLOT_GRID, zeroline: false,
     },
-    legend: { bgcolor: '#1a1d2700', font: { size: 10 }, orientation: 'h', y: -0.2 },
+    legend: { bgcolor: `${PLOT_PANEL}00`, font: { size: 10 }, orientation: 'h', y: -0.2 },
     hovermode: 'x unified',
-    hoverlabel: { bgcolor: '#1a1d27', bordercolor: '#2e3245', font: { size: 11 } },
+    hoverlabel: { bgcolor: PLOT_PANEL, bordercolor: PLOT_GRID, font: { size: 11 } },
   };
 
   const el = document.getElementById('diurnal-chart');
@@ -2455,18 +2483,14 @@ function renderThermalLagChart(modelled) {
     line: { color: sp.color, width: 2 }, marker: { size: 5 },
   }));
 
-  const layout = {
-    paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
-    font: { color: '#e2e6f0', size: 10 },
+  const layout = thermalLayout('Lag correlation (hours)', {
     margin: { t: 30, r: 10, b: 40, l: 40 },
-    title: { text: 'Lag correlation (hours)', font: { size: 11, color: '#7b82a0' }, y: 0.97 },
-    xaxis: { title: { text: 'Lag (hours)', standoff: 4 }, gridcolor: '#2e3245', linecolor: '#2e3245', dtick: 4 },
-    yaxis: { title: { text: 'r', standoff: 4 }, gridcolor: '#2e3245', linecolor: '#2e3245',
+    xaxis: plotAxis({ title: { text: 'Lag (hours)', standoff: 4 }, dtick: 4 }),
+    yaxis: plotAxis({ title: { text: 'r', standoff: 4 },
       range: [Math.min(-0.25, Math.floor(Math.min(...modelled.flatMap(sp => sp.lags.map(d => d.r))) / 0.25) * 0.25), 1],
-      zeroline: true, zerolinecolor: '#ffffff33', zerolinewidth: 1 },
-    legend: { bgcolor: '#0f111700', font: { size: 10 }, orientation: 'h', y: -0.3 },
+      zeroline: true, zerolinecolor: '#ffffff33', zerolinewidth: 1 }),
     hovermode: 'x unified',
-  };
+  });
   Plotly.react(document.getElementById('thermal-lag-chart'), traces, layout, THERMAL_PLOT_CFG);
 }
 
@@ -2499,18 +2523,13 @@ function renderThermalResidualChart(modelled, ev) {
     });
   }
 
-  const layout = {
-    paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
-    font: { color: '#e2e6f0', size: 10 },
-    margin: { t: 30, r: 10, b: 40, l: 50 },
-    title: { text: 'HVAC residual — positive=heat, negative=cool', font: { size: 11, color: '#7b82a0' }, y: 0.97 },
-    xaxis: { type: 'date', gridcolor: '#2e3245', linecolor: '#2e3245' },
-    yaxis: { title: { text: 'Residual °F', standoff: 4 }, gridcolor: '#2e3245', linecolor: '#2e3245', zeroline: true, zerolinecolor: '#ffffff33' },
-    legend: { bgcolor: '#0f111700', font: { size: 10 }, orientation: 'h', y: -0.3 },
+  const layout = thermalLayout('HVAC residual — positive=heat, negative=cool', {
+    xaxis: plotAxis({ type: 'date' }),
+    yaxis: plotAxis({ title: { text: 'Residual °F', standoff: 4 }, zeroline: true, zerolinecolor: '#ffffff33' }),
     hovermode: 'closest',
     shapes: [{ type: 'line', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 1.5, y1: 1.5, line: { color: '#f9731633', width: 1, dash: 'dot' } },
              { type: 'line', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: -1.5, y1: -1.5, line: { color: '#60a5fa33', width: 1, dash: 'dot' } }],
-  };
+  });
   Plotly.react(document.getElementById('thermal-residual-chart'), traces, layout, THERMAL_PLOT_CFG);
 }
 
@@ -2546,16 +2565,11 @@ function renderThermalScatterChart(modelled, outHr, outSmooth, ev) {
       line: { color, width: 1.5, dash: 'dash' }, showlegend: false });
   }
 
-  const layout = {
-    paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
-    font: { color: '#e2e6f0', size: 10 },
-    margin: { t: 30, r: 10, b: 40, l: 50 },
-    title: { text: 'Thermal phase: outdoor (lagged) vs indoor °F', font: { size: 11, color: '#7b82a0' }, y: 0.97 },
-    xaxis: { title: { text: 'Outdoor °F (lagged)', standoff: 4 }, gridcolor: '#2e3245', linecolor: '#2e3245' },
-    yaxis: { title: { text: 'Indoor °F', standoff: 4 }, gridcolor: '#2e3245', linecolor: '#2e3245' },
-    legend: { bgcolor: '#0f111700', font: { size: 10 }, orientation: 'h', y: -0.3 },
+  const layout = thermalLayout('Thermal phase: outdoor (lagged) vs indoor °F', {
+    xaxis: plotAxis({ title: { text: 'Outdoor °F (lagged)', standoff: 4 } }),
+    yaxis: plotAxis({ title: { text: 'Indoor °F', standoff: 4 } }),
     hovermode: 'closest',
-  };
+  });
   Plotly.react(document.getElementById('thermal-scatter-chart'), traces, layout, THERMAL_PLOT_CFG);
 }
 
@@ -2586,20 +2600,17 @@ function renderThermalMonthlyChart(modelled, ev) {
       type: 'bar', marker: { color: `${sp.color}55` } });
   }
 
-  const layout = {
-    paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
-    font: { color: '#e2e6f0', size: 10 },
+  const layout = thermalLayout('Monthly HVAC activity (heat ▲ / cool ▼ event hours)', {
     margin: { t: 30, r: 10, b: 50, l: 50 },
-    title: { text: 'Monthly HVAC activity (heat ▲ / cool ▼ event hours)', font: { size: 11, color: '#7b82a0' }, y: 0.97 },
+    legendY: -0.45,
     barmode: 'group',
-    xaxis: { gridcolor: '#2e3245', linecolor: '#2e3245', tickangle: -45 },
-    yaxis: { gridcolor: '#2e3245', linecolor: '#2e3245', zeroline: true, zerolinecolor: '#ffffff44',
-      tickformat: 'd', title: { text: 'Hours', standoff: 4 } },
-    legend: { bgcolor: '#0f111700', font: { size: 10 }, orientation: 'h', y: -0.45 },
+    xaxis: plotAxis({ tickangle: -45 }),
+    yaxis: plotAxis({ zeroline: true, zerolinecolor: '#ffffff44',
+      tickformat: 'd', title: { text: 'Hours', standoff: 4 } }),
     hovermode: 'x unified',
     shapes: [{ type: 'line', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 0, y1: 0,
       line: { color: '#ffffff33', width: 1 } }],
-  };
+  });
   Plotly.react(document.getElementById('thermal-monthly-chart'), traces, layout, THERMAL_PLOT_CFG);
 }
 
