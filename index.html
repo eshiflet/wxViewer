@@ -187,6 +187,53 @@
 
   .series-list { display: flex; flex-direction: column; gap: 1px; }
 
+  /* marker on a series whose data is partly hidden by an ignore period */
+  .series-clock {
+    font-size: 10px; flex-shrink: 0; opacity: 0.85; cursor: help;
+  }
+
+  /* ── Ignore-period editor ─────────────────────────────────────────── */
+  .ignore-backdrop {
+    position: fixed; inset: 0; background: #000000aa; z-index: 90;
+    display: none; align-items: center; justify-content: center;
+  }
+  .ignore-backdrop.visible { display: flex; }
+  .ignore-modal {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: 0 8px 32px #000000aa;
+    width: min(760px, 92vw); max-height: 84vh; display: flex; flex-direction: column;
+  }
+  .ignore-head { padding: 14px 16px 10px; border-bottom: 1px solid var(--border); }
+  .ignore-head h3 { margin: 0 0 6px; font-size: 14px; }
+  .ignore-head p  { margin: 0; font-size: 11px; color: var(--muted); line-height: 1.5; }
+  .ignore-body { overflow-y: auto; padding: 6px 8px; }
+  .ignore-row {
+    display: grid; grid-template-columns: 9px 1fr auto auto;
+    align-items: center; gap: 8px; padding: 4px 8px; border-radius: 4px;
+  }
+  .ignore-row:hover { background: var(--surface); }
+  .ignore-row.set { background: #4f8ef70f; }
+  .ignore-name { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ignore-field { display: flex; align-items: center; gap: 5px; }
+  .ignore-field span { font-size: 10px; color: var(--muted); }
+  .ignore-field input {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text); padding: 2px 5px; font-size: 10px; font-family: inherit;
+    color-scheme: dark;
+  }
+  .ignore-foot {
+    padding: 10px 16px; border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .ignore-foot .spacer { flex: 1; }
+  .ignore-foot button {
+    font-size: 11px; padding: 5px 12px; border-radius: 4px; cursor: pointer;
+    background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+  }
+  .ignore-foot button:hover { color: var(--text); }
+  .ignore-foot button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #ignore-summary { font-size: 11px; color: var(--muted); }
+
   .series-item {
     display: flex;
     align-items: center;
@@ -199,6 +246,44 @@
   .series-item:hover { background: var(--surface); }
   .series-item input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
   .series-swatch { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  button.series-swatch { padding: 0; border: none; cursor: pointer; }
+  button.series-swatch:hover { box-shadow: 0 0 0 2px var(--text); }
+  button.series-swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ── Colour picker popover ────────────────────────────────────────── */
+  .color-pop {
+    position: fixed; z-index: 120; display: none;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 6px; box-shadow: 0 8px 24px #000000aa; padding: 8px;
+    width: 196px;
+  }
+  .color-pop.visible { display: block; }
+  .color-pop-title {
+    font-size: 10px; color: var(--muted); margin-bottom: 6px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .color-grid { display: grid; grid-template-columns: repeat(9, 1fr); gap: 4px; }
+  .color-grid button {
+    width: 16px; height: 16px; border-radius: 50%; border: none;
+    padding: 0; cursor: pointer;
+  }
+  .color-grid button:hover { box-shadow: 0 0 0 2px var(--text); }
+  .color-grid button.current { box-shadow: 0 0 0 2px var(--text); }
+  .color-pop-foot {
+    display: flex; align-items: center; gap: 6px; margin-top: 8px;
+    padding-top: 8px; border-top: 1px solid var(--border);
+  }
+  .color-pop-foot label { font-size: 10px; color: var(--muted); cursor: pointer; }
+  .color-pop-foot input[type=color] {
+    width: 22px; height: 18px; padding: 0; background: none;
+    border: 1px solid var(--border); border-radius: 3px; cursor: pointer;
+  }
+  .color-pop-foot .spacer { flex: 1; }
+  .color-pop-foot button {
+    font-size: 10px; padding: 3px 8px; border-radius: 4px; cursor: pointer;
+    background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+  }
+  .color-pop-foot button:hover { color: var(--text); }
   .series-name { font-size: 11px; line-height: 1.3; flex: 1; min-width: 0; }
 
   /* ── Chart area ───────────────────────────────────────────── */
@@ -434,9 +519,13 @@
   .season-config-header.open .caret { transform: rotate(90deg); }
   .season-config-body {
     display: none; padding: 0 16px 12px;
-    gap: 24px; flex-wrap: wrap;
+    flex-direction: column; gap: 14px;
   }
   .season-config-body.open { display: flex; }
+  .season-row { display: flex; gap: 24px; flex-wrap: wrap; }
+  .season-row + .season-row {
+    border-top: 1px solid var(--border); padding-top: 14px;
+  }
   .season-group { flex: 1; min-width: 220px; }
   .season-group-title {
     font-size: 11px; font-weight: 700; text-transform: uppercase;
@@ -469,6 +558,31 @@
     font-size: 11px; color: var(--muted); line-height: 1.6;
   }
   .season-passive-info b { color: #a3e635; }
+
+  /* ── Thermal sensor roles ─────────────────────────────────────────── */
+  .season-group-title.indoor  { color: #f59e0b; }
+  .season-group-title.outdoor { color: #38bdf8; }
+  .sensor-list {
+    max-height: 168px; overflow-y: auto;
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 3px; display: flex; flex-direction: column; gap: 1px;
+  }
+  .sensor-item {
+    display: flex; align-items: center; gap: 6px;
+    padding: 2px 5px; border-radius: 3px; font-size: 11px; cursor: pointer;
+  }
+  .sensor-item:hover { background: var(--surface); }
+  .sensor-item input { accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+  .sensor-item .series-swatch { width: 8px; height: 8px; }
+  .sensor-item.taken { opacity: 0.4; cursor: not-allowed; }
+  .sensor-item.taken input { cursor: not-allowed; }
+  .sensor-item .role-note { font-size: 9px; color: var(--muted); margin-left: auto; }
+  .sensor-select {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text); padding: 4px 6px; font-size: 11px; width: 100%;
+    font-family: inherit;
+  }
+  .sensor-hint { font-size: 10px; color: var(--muted); line-height: 1.5; margin-top: 4px; }
 
   /* ── Thermal summary cards ────────────────────────────────── */
   .thermal-card {
@@ -584,6 +698,7 @@
       <div class="sidebar-actions" id="sidebar-actions" style="display:none">
         <button id="select-all-btn">All</button>
         <button id="select-none-btn">None</button>
+        <button id="ignore-btn" title="Hide a warm-up or faulty stretch of readings, per series">Ignore…</button>
       </div>
       <div class="series-list" id="series-list">
         <div style="font-size:11px;color:var(--muted);padding:4px 5px">Load CSV files to begin</div>
@@ -633,10 +748,11 @@
           <div class="season-config" id="season-config">
             <div class="season-config-header" id="season-config-toggle">
               <span class="caret">▶</span>
-              ⚙ Season Configuration
+              ⚙ Configuration
               <span style="font-weight:400;font-size:11px;margin-left:8px" id="season-config-summary"></span>
             </div>
             <div class="season-config-body" id="season-config-body">
+              <div class="season-row">
               <div class="season-group">
                 <div class="season-group-title heat">🔥 Heating Active</div>
                 <div class="season-ranges" id="heat-ranges"></div>
@@ -653,6 +769,25 @@
                   All dates not in a heating or cooling range.<br>
                   These train the regression model.
                 </div>
+              </div>
+              </div>
+
+              <div class="season-row">
+              <div class="season-group">
+                <div class="season-group-title indoor">🏠 Indoor Temperature Sensors</div>
+                <div class="sensor-list" id="indoor-sensor-list"></div>
+                <div class="sensor-hint">
+                  Each one is modelled against the outdoor sensor separately.
+                </div>
+              </div>
+              <div class="season-group">
+                <div class="season-group-title outdoor">🌤 Outdoor Temperature Sensor</div>
+                <select class="sensor-select" id="outdoor-sensor-select"></select>
+                <div class="sensor-hint">
+                  The reference every indoor sensor is compared against. A sensor
+                  used here can't also be an indoor sensor.
+                </div>
+              </div>
               </div>
             </div>
           </div>
@@ -710,9 +845,45 @@
   </div>
 </div>
 
+<div class="color-pop" id="color-pop">
+  <div class="color-pop-title" id="color-pop-title"></div>
+  <div class="color-grid" id="color-grid"></div>
+  <div class="color-pop-foot">
+    <label>Custom <input type="color" id="color-custom"></label>
+    <span class="spacer"></span>
+    <button id="color-reset">Reset</button>
+  </div>
+</div>
+
+<div class="ignore-backdrop" id="ignore-backdrop">
+  <div class="ignore-modal">
+    <div class="ignore-head">
+      <h3>Ignore periods</h3>
+      <p>Every series uses all of its data by default. Set a bound here to hide readings
+         you know are wrong — a new sensor still equilibrating, or a stretch where one
+         misbehaved. <b>Ignore before</b> keeps the reading at that exact time; <b>ignore
+         after</b> hides everything past it. Times are your local clock, the same one the
+         chart is drawn in. Nothing is deleted — clear a bound and the readings come back.
+         These rules are saved in this browser only, and apply to whatever data you load.</p>
+    </div>
+    <div class="ignore-body" id="ignore-body"></div>
+    <div class="ignore-foot">
+      <span id="ignore-summary"></span>
+      <span class="spacer"></span>
+      <button id="ignore-clear">Clear all</button>
+      <button id="ignore-done" class="primary">Done</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── Palette ─────────────────────────────────────────────────────────────
-const PALETTE = [
+// The first 30 are hand-picked and stay fixed so familiar series keep their
+// familiar colour. Past that the palette GROWS ON DEMAND instead of wrapping:
+// a fixed-length list assigned with `i % length` silently hands two series the
+// same colour the moment a station reports more channels than the list has,
+// which is exactly what happened here when the column count reached 35.
+const BASE_PALETTE = [
   '#4f8ef7','#f97316','#22c55e','#a855f7','#ef4444',
   '#06b6d4','#eab308','#ec4899','#14b8a6','#f43f5e',
   '#8b5cf6','#10b981','#fb923c','#60a5fa','#34d399',
@@ -721,16 +892,160 @@ const PALETTE = [
   '#d946ef','#fbbf24','#67e8f9','#f9a8d4','#86efac',
 ];
 
-const SERIES_COLOR_OVERRIDES = {
-  'Office Temperature (°F)': '#22c55e',
-};
+const PALETTE = BASE_PALETTE.slice();
 
-// Default selected series
-const DEFAULT_SELECTED = [
-  'Outdoor Temperature (°F)',
-  'Office Temperature (°F)',
-  'Basement Temperature (°F)',
-];
+function hslToHex(h, s, l) {
+  s /= 100; l /= 100;
+  const k = n => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = n => {
+    const c = l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return Math.round(255 * c).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+// Grow the palette to at least `n` entries. New colours step around the hue
+// circle by the golden angle (137.5°), which keeps successive hues far apart
+// and never revisits the same hue, cycling through three lightness bands so
+// the sequence stays distinguishable long after the hues start to come round.
+function ensurePalette(n) {
+  for (let k = 0; PALETTE.length < n && k < n * 4; k++) {
+    const hue  = (k * 137.508) % 360;
+    const band = k % 3;
+    const hex  = hslToHex(hue, [70, 58, 82][band], [63, 74, 53][band]);
+    if (!PALETTE.includes(hex)) PALETTE.push(hex);
+  }
+}
+
+// ── Per-series colours ──────────────────────────────────────────────────
+// Which colour belongs to which sensor is a matter of taste about one
+// person's station, so it lives in this browser rather than in the app.
+// With nothing set, every series takes the palette entry at its own index —
+// and because the palette grows to fit, no two series can collide.
+const COLOR_STORAGE_KEY = 'wxviewer-series-colors';
+let seriesColors = {};
+
+function loadSeriesColors() {
+  try {
+    const raw = localStorage.getItem(COLOR_STORAGE_KEY);
+    seriesColors = raw ? JSON.parse(raw) : {};
+  } catch { seriesColors = {}; }
+}
+
+function saveSeriesColors() {
+  try { localStorage.setItem(COLOR_STORAGE_KEY, JSON.stringify(seriesColors)); }
+  catch { /* storage unavailable — choices still apply for this session */ }
+}
+
+function seriesColor(col, i) {
+  return seriesColors[col] ?? PALETTE[i] ?? PALETTE[i % PALETTE.length];
+}
+
+// ── Default selected series ─────────────────────────────────────────────
+// Any temperature channel, whatever the station happens to call it.
+const DEFAULT_SELECTED_RE = /temp/i;
+
+// Battery levels are status flags, not measurements — they make meaningless
+// "records" and clutter the series list's high/low table. Matched by name so
+// this holds for sensors added later, without anyone editing a list.
+const BATTERY_RE = /batter/i;
+
+// ── Per-series ignore periods ───────────────────────────────────────────
+// A freshly installed sensor reports garbage until it equilibrates with its
+// surroundings, and a failing one can report garbage for a stretch in the
+// middle. Neither is something the app can know about, so nothing is ignored
+// by default — every series uses all of its data until the viewer says
+// otherwise. Rules are per-series and live in this browser's localStorage,
+// never in the app source: they describe one person's sensors, not the app.
+//
+// Shape: { "<column name>": { before?: "YYYY-MM-DDTHH:mm", after?: "…" } }
+// The stored strings are exactly what the datetime-local inputs produce, so
+// they round-trip into the editor unchanged and are read as local wall-clock
+// time — the same clock the chart's axis is drawn in.
+const IGNORE_STORAGE_KEY = 'wxviewer-ignore-periods';
+
+let ignorePeriods = {};   // raw, as edited and persisted
+let ignoreRules   = [];   // [col, {beforeMs, afterMs}] — parsed, for hot loops
+
+function loadIgnorePeriods() {
+  try {
+    const raw = localStorage.getItem(IGNORE_STORAGE_KEY);
+    ignorePeriods = raw ? JSON.parse(raw) : {};
+  } catch { ignorePeriods = {}; }      // private mode, blocked storage, bad JSON
+  compileIgnoreRules();
+}
+
+function saveIgnorePeriods() {
+  // Drop entries that no longer constrain anything, so the store stays tidy.
+  for (const [col, p] of Object.entries(ignorePeriods)) {
+    if (!p || (!p.before && !p.after)) delete ignorePeriods[col];
+  }
+  try { localStorage.setItem(IGNORE_STORAGE_KEY, JSON.stringify(ignorePeriods)); }
+  catch { /* storage unavailable — rules still apply for this session */ }
+  compileIgnoreRules();
+}
+
+function compileIgnoreRules() {
+  ignoreRules = Object.entries(ignorePeriods).map(([col, p]) => {
+    const before = p.before ? new Date(p.before).getTime() : NaN;
+    const after  = p.after  ? new Date(p.after ).getTime() : NaN;
+    return [col, { beforeMs: isNaN(before) ? null : before,
+                   afterMs:  isNaN(after)  ? null : after }];
+  }).filter(([, r]) => r.beforeMs !== null || r.afterMs !== null);
+}
+
+// A reading is ignored if it falls before the series' start bound or after its
+// end bound. `before` is exclusive — the reading at that exact instant is the
+// first one kept — which is how people describe it: "good starting at 9:50".
+function isIgnored(ts, rule) {
+  if (rule.beforeMs !== null && ts <  rule.beforeMs) return true;
+  if (rule.afterMs  !== null && ts >  rule.afterMs)  return true;
+  return false;
+}
+
+// Rows in the active date range, with any ignore periods applied. allRows is
+// never modified, so widening or clearing a period brings the readings back
+// immediately with no reload. Rows are only copied when a rule actually hides
+// a value in them, so the common case costs nothing.
+function visibleRows() {
+  const inRange = allRows.filter(r => {
+    if (dateFrom && r.ts < dateFrom) return false;
+    if (dateTo   && r.ts > dateTo)   return false;
+    return true;
+  });
+  if (!ignoreRules.length) return inRange;
+
+  return inRange.map(r => {
+    let masked = null;
+    for (const [col, rule] of ignoreRules) {
+      if (r[col] == null) continue;
+      if (!isIgnored(+r.ts, rule)) continue;
+      if (!masked) masked = { ...r };
+      delete masked[col];
+    }
+    return masked || r;
+  });
+}
+
+// Merge one file's header list into the running column list, preserving order.
+// Sensors get added to the station over time, so a later file carries columns
+// the first file never had. Rather than taking the first file's header row as
+// gospel (which hides every later sensor) or appending strays to the end, each
+// unseen name is spliced in just after the last column we already recognised —
+// so a new sensor lands beside its neighbours, and files can arrive in any
+// order without changing the result.
+function mergeColumns(existing, headers) {
+  const merged = existing.slice();
+  let at = -1;                      // index in `merged` of the last known header
+  for (const h of headers) {
+    if (!h) continue;
+    const found = merged.indexOf(h);
+    if (found !== -1) { at = found; continue; }
+    merged.splice(++at, 0, h);
+  }
+  return merged;
+}
 
 // ── Open-Meteo model config ─────────────────────────────────────────────
 const MODELS = {
@@ -771,6 +1086,10 @@ const seriesList     = document.getElementById('series-list');
 const sidebarActions = document.getElementById('sidebar-actions');
 const selectAllBtn   = document.getElementById('select-all-btn');
 const selectNoneBtn  = document.getElementById('select-none-btn');
+const ignoreBtn      = document.getElementById('ignore-btn');
+const ignoreBackdrop = document.getElementById('ignore-backdrop');
+const ignoreBody     = document.getElementById('ignore-body');
+const ignoreSummary  = document.getElementById('ignore-summary');
 const emptyState     = document.getElementById('empty-state');
 const chartEl        = document.getElementById('chart');
 const loadingEl      = document.getElementById('loading');
@@ -828,15 +1147,15 @@ fileInput.addEventListener('change', async e => {
   showLoading(true, 'Parsing CSV files…');
   await sleep(0);
 
-  const allParsed = []; let cols = null;
+  const allParsed = []; let cols = [];
   for (const file of files) {
     const text = await readFile(file);
     const { headers, rows } = parseCSV(text);
-    if (!cols) cols = headers;
+    cols = mergeColumns(cols, headers);
     allParsed.push(...rows);
   }
   allParsed.sort((a, b) => a.ts - b.ts);
-  allRows = allParsed; columns = cols || [];
+  allRows = allParsed; columns = cols;
 
   fileStatus.textContent = `${files.length} file${files.length > 1 ? 's' : ''} · ${allRows.length.toLocaleString()} readings`;
 
@@ -890,12 +1209,19 @@ document.getElementById('sample-data-btn').addEventListener('click', async () =>
 
 // ── Sidebar ─────────────────────────────────────────────────────────────
 function buildSidebar() {
+  ensurePalette(columns.length);
+  // A new dataset can add or drop channels, so refresh the sensor pickers if
+  // the configuration section happens to be open.
+  if (document.getElementById('season-config-body').classList.contains('open')) {
+    renderSensorConfig();
+  }
+  updateSeasonSummary(loadSeasonConfig());
   seriesList.innerHTML = '';
   sidebarActions.style.display = 'flex';
   checkedCols.clear();
 
   columns.forEach((col, i) => {
-    if (DEFAULT_SELECTED.includes(col)) checkedCols.add(col);
+    if (DEFAULT_SELECTED_RE.test(col)) checkedCols.add(col);
 
     const item = document.createElement('label');
     item.className = 'series-item';
@@ -907,14 +1233,30 @@ function buildSidebar() {
       renderChart();
     });
 
-    const swatch = document.createElement('div');
+    // A <button> inside the row's <label>: without preventDefault a click
+    // here would toggle the checkbox the label is bound to.
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
     swatch.className = 'series-swatch';
-    swatch.style.background = SERIES_COLOR_OVERRIDES[col] ?? PALETTE[i % PALETTE.length];
+    swatch.style.background = seriesColor(col, i);
+    swatch.title = 'Change colour';
+    swatch.addEventListener('click', e => {
+      e.preventDefault(); e.stopPropagation();
+      openColorPicker(col, i, swatch);
+    });
 
     const name = document.createElement('span');
     name.className = 'series-name'; name.textContent = col;
 
     item.append(cb, swatch, name);
+
+    const p = ignorePeriods[col];
+    if (p && (p.before || p.after)) {
+      const mark = document.createElement('span');
+      mark.className = 'series-clock'; mark.textContent = '⏱';
+      mark.title = describeIgnore(p);
+      item.appendChild(mark);
+    }
     seriesList.appendChild(item);
   });
 
@@ -929,6 +1271,176 @@ function buildSidebar() {
     renderChart();
   };
 }
+
+// ── Colour picker ───────────────────────────────────────────────────────
+const colorPop    = document.getElementById('color-pop');
+const colorGrid   = document.getElementById('color-grid');
+const colorTitle  = document.getElementById('color-pop-title');
+const colorCustom = document.getElementById('color-custom');
+let   colorTarget = null;   // { col, i }
+
+function applySeriesColor(col, hex) {
+  if (hex) seriesColors[col] = hex; else delete seriesColors[col];
+  saveSeriesColors();
+  refreshSwatches();
+  renderChartAndAnalysis();
+}
+
+// Repaint every swatch in place — cheaper than rebuilding the sidebar, and it
+// leaves checkbox state and scroll position alone.
+function refreshSwatches() {
+  [...seriesList.children].forEach((item, i) => {
+    const sw = item.querySelector('.series-swatch');
+    if (sw) sw.style.background = seriesColor(columns[i], i);
+  });
+  if (ignoreBackdrop.classList.contains('visible')) {
+    [...ignoreBody.children].forEach((row, i) => {
+      const sw = row.querySelector('.series-swatch');
+      if (sw) sw.style.background = seriesColor(columns[i], i);
+    });
+  }
+}
+
+function openColorPicker(col, i, anchor) {
+  colorTarget = { col, i };
+  colorTitle.textContent = col;
+  const current = seriesColor(col, i);
+  colorCustom.value = /^#[0-9a-f]{6}$/i.test(current) ? current : '#4f8ef7';
+
+  colorGrid.innerHTML = '';
+  // Offer at least a full screen of choices, and always every colour the
+  // current column list can reach, so nothing on the chart is unpickable.
+  ensurePalette(Math.max(45, columns.length));
+  PALETTE.slice(0, 45).forEach(hex => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.style.background = hex;
+    b.title = hex;
+    if (hex.toLowerCase() === current.toLowerCase()) b.className = 'current';
+    b.addEventListener('click', () => { applySeriesColor(col, hex); closeColorPicker(); });
+    colorGrid.appendChild(b);
+  });
+
+  // Anchor beside the swatch, nudged back on screen if it would overflow.
+  const r = anchor.getBoundingClientRect();
+  colorPop.classList.add('visible');
+  const pw = colorPop.offsetWidth, ph = colorPop.offsetHeight;
+  colorPop.style.left = `${Math.min(r.left, window.innerWidth  - pw - 8)}px`;
+  colorPop.style.top  = `${Math.min(r.bottom + 6, window.innerHeight - ph - 8)}px`;
+}
+
+function closeColorPicker() {
+  colorPop.classList.remove('visible');
+  colorTarget = null;
+}
+
+colorCustom.addEventListener('input', () => {
+  if (colorTarget) applySeriesColor(colorTarget.col, colorCustom.value);
+});
+document.getElementById('color-reset').addEventListener('click', () => {
+  if (colorTarget) applySeriesColor(colorTarget.col, null);
+  closeColorPicker();
+});
+document.addEventListener('mousedown', e => {
+  if (colorPop.classList.contains('visible') &&
+      !colorPop.contains(e.target) && !e.target.closest('.series-swatch')) closeColorPicker();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeColorPicker(); });
+
+// ── Ignore-period editor ────────────────────────────────────────────────
+function describeIgnore(p) {
+  const bits = [];
+  if (p.before) bits.push(`ignoring before ${p.before.replace('T', ' ')}`);
+  if (p.after)  bits.push(`ignoring after ${p.after.replace('T', ' ')}`);
+  return bits.join(' · ');
+}
+
+function buildIgnoreEditor() {
+  ignoreBody.innerHTML = '';
+
+  columns.forEach((col, i) => {
+    const p   = ignorePeriods[col] || {};
+    const row = document.createElement('div');
+    row.className = 'ignore-row' + ((p.before || p.after) ? ' set' : '');
+
+    const swatch = document.createElement('div');
+    swatch.className = 'series-swatch';
+    swatch.style.background = seriesColor(col, i);
+
+    const name = document.createElement('span');
+    name.className = 'ignore-name'; name.textContent = col; name.title = col;
+
+    const field = (label, key) => {
+      const wrap = document.createElement('label');
+      wrap.className = 'ignore-field';
+      const tag = document.createElement('span'); tag.textContent = label;
+      const inp = document.createElement('input');
+      inp.type = 'datetime-local';
+      inp.value = (ignorePeriods[col] && ignorePeriods[col][key]) || '';
+      inp.addEventListener('change', () => {
+        const entry = ignorePeriods[col] || (ignorePeriods[col] = {});
+        if (inp.value) entry[key] = inp.value; else delete entry[key];
+        saveIgnorePeriods();
+        row.classList.toggle('set', !!(entry.before || entry.after));
+        updateIgnoreSummary();
+        buildSidebarMarkers();
+        renderChartAndAnalysis();
+      });
+      wrap.append(tag, inp);
+      return wrap;
+    };
+
+    row.append(swatch, name, field('ignore before', 'before'), field('ignore after', 'after'));
+    ignoreBody.appendChild(row);
+  });
+
+  updateIgnoreSummary();
+}
+
+function updateIgnoreSummary() {
+  const n = ignoreRules.length;
+  ignoreSummary.textContent = n
+    ? `${n} series with an ignore period`
+    : 'No ignore periods — all series using all data';
+}
+
+// Refresh just the ⏱ markers without tearing down checkbox state.
+function buildSidebarMarkers() {
+  [...seriesList.children].forEach((item, i) => {
+    const col = columns[i];
+    item.querySelector('.series-clock')?.remove();
+    const p = ignorePeriods[col];
+    if (p && (p.before || p.after)) {
+      const mark = document.createElement('span');
+      mark.className = 'series-clock'; mark.textContent = '⏱';
+      mark.title = describeIgnore(p);
+      item.appendChild(mark);
+    }
+  });
+}
+
+ignoreBtn.addEventListener('click', () => {
+  buildIgnoreEditor();
+  ignoreBackdrop.classList.add('visible');
+});
+document.getElementById('ignore-done').addEventListener('click',
+  () => ignoreBackdrop.classList.remove('visible'));
+ignoreBackdrop.addEventListener('click', e => {
+  if (e.target === ignoreBackdrop) ignoreBackdrop.classList.remove('visible');
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') ignoreBackdrop.classList.remove('visible');
+});
+document.getElementById('ignore-clear').addEventListener('click', () => {
+  ignorePeriods = {};
+  saveIgnorePeriods();
+  buildIgnoreEditor();
+  buildSidebarMarkers();
+  renderChartAndAnalysis();
+});
+
+loadIgnorePeriods();
+loadSeriesColors();
 
 // ── Date controls ────────────────────────────────────────────────────────
 applyBtn.addEventListener('click', () => {
@@ -962,11 +1474,7 @@ document.querySelectorAll('[data-days]').forEach(btn => {
 
 // Export visible filtered data as CSV
 exportBtn.addEventListener('click', () => {
-  const filtered = allRows.filter(r => {
-    if (dateFrom && r.ts < dateFrom) return false;
-    if (dateTo   && r.ts > dateTo)   return false;
-    return true;
-  });
+  const filtered = visibleRows();
   if (!filtered.length) return;
 
   const activeCols = columns.filter(c => checkedCols.has(c));
@@ -1101,11 +1609,7 @@ function renderChart() {
     return;
   }
 
-  const filtered = allRows.filter(r => {
-    if (dateFrom && r.ts < dateFrom) return false;
-    if (dateTo   && r.ts > dateTo)   return false;
-    return true;
-  });
+  const filtered = visibleRows();
 
   if (!filtered.length) {
     emptyState.style.display = 'flex';
@@ -1123,7 +1627,7 @@ function renderChart() {
   // ── Observation traces ─────────────────────────────────────────────
   columns.forEach((col, i) => {
     if (!checkedCols.has(col)) return;
-    const color  = SERIES_COLOR_OVERRIDES[col] ?? PALETTE[i % PALETTE.length];
+    const color  = seriesColor(col, i);
     const yvals  = filtered.map(r => typeof r[col] === 'number' ? r[col] : null);
 
     traces.push({
@@ -1269,13 +1773,20 @@ function updateStatsBar(filtered) {
 
   activeCols.forEach((col, idx) => {
     const colIdx = columns.indexOf(col);
-    const color  = SERIES_COLOR_OVERRIDES[col] ?? PALETTE[colIdx % PALETTE.length];
-    const vals   = filtered.map(r => r[col]).filter(v => typeof v === 'number' && !isNaN(v));
-    if (!vals.length) return;
-
-    const min = Math.min(...vals);
-    const max = Math.max(...vals);
-    const avg = vals.reduce((s, v) => s + v, 0) / vals.length;
+    const color  = seriesColor(col, colIdx);
+    // One pass, no intermediate array: Math.min(...vals) passes every reading
+    // as a separate argument and blows the call stack somewhere north of 100k
+    // of them, which a year of 5-minute readings comfortably exceeds.
+    let min = Infinity, max = -Infinity, sum = 0, n = 0;
+    for (const r of filtered) {
+      const v = r[col];
+      if (typeof v !== 'number' || isNaN(v)) continue;
+      if (v < min) min = v;
+      if (v > max) max = v;
+      sum += v; n++;
+    }
+    if (!n) return;
+    const avg = sum / n;
 
     const chip = document.createElement('div');
     chip.className = 'stat-chip';
@@ -1293,6 +1804,116 @@ function updateStatsBar(filtered) {
 }
 
 // ── Season configuration ─────────────────────────────────────────────────
+// ── Thermal sensor roles ────────────────────────────────────────────────
+// Which channel is "outdoor" and which are "indoor" depends entirely on one
+// person's station, so the choice lives in this browser. Until someone
+// chooses, roles are guessed from the column names, which keeps the panel
+// working out of the box without naming anyone's sensors in the source.
+const THERMAL_SENSORS_KEY = 'wxviewer-thermal-sensors';
+
+function loadThermalSensors() {
+  try {
+    const raw = localStorage.getItem(THERMAL_SENSORS_KEY);
+    return raw ? JSON.parse(raw) : null;      // null = never configured
+  } catch { return null; }
+}
+
+function saveThermalSensors(cfg) {
+  try { localStorage.setItem(THERMAL_SENSORS_KEY, JSON.stringify(cfg)); }
+  catch { /* storage unavailable — choice still applies this session */ }
+}
+
+// Best guess when nothing has been configured: the outdoor reference is the
+// temperature channel that calls itself outdoor, and every other temperature
+// channel is treated as a space inside the building.
+function guessThermalSensors(cols) {
+  const temps   = cols.filter(c => DEFAULT_SELECTED_RE.test(c));
+  const outdoor = temps.find(c => /outdoor|outside|exterior/i.test(c)) || temps[0] || '';
+  return { outdoor, indoor: temps.filter(c => c !== outdoor) };
+}
+
+// The roles actually in force, with anything no longer in the data dropped so
+// a stale name from an old dataset can't silently select nothing.
+function thermalSensors() {
+  const saved = loadThermalSensors();
+  const cfg   = saved || guessThermalSensors(columns);
+  const outdoor = columns.includes(cfg.outdoor) ? cfg.outdoor : '';
+  return {
+    outdoor,
+    indoor: (cfg.indoor || []).filter(c => columns.includes(c) && c !== outdoor),
+    configured: !!saved,
+  };
+}
+
+function setThermalSensors(next) {
+  saveThermalSensors({ outdoor: next.outdoor, indoor: next.indoor });
+  renderSensorConfig();
+  updateSeasonSummary(loadSeasonConfig());
+  if (analysisPanel.classList.contains('visible')) renderActiveView();
+}
+
+function renderSensorConfig() {
+  const list = document.getElementById('indoor-sensor-list');
+  const sel  = document.getElementById('outdoor-sensor-select');
+  const cur  = thermalSensors();
+
+  list.innerHTML = '';
+  if (!columns.length) {
+    list.innerHTML = '<div class="sensor-hint" style="padding:4px 5px">Load CSV files to choose sensors.</div>';
+    sel.innerHTML = '';
+    return;
+  }
+
+  columns.forEach((col, i) => {
+    const isOutdoor = col === cur.outdoor;
+    const item = document.createElement('label');
+    item.className = 'sensor-item' + (isOutdoor ? ' taken' : '');
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked  = cur.indoor.includes(col);
+    cb.disabled = isOutdoor;                 // a sensor fills one role or the other
+    cb.addEventListener('change', () => {
+      const next = thermalSensors();
+      const set  = new Set(next.indoor);
+      if (cb.checked) set.add(col); else set.delete(col);
+      setThermalSensors({ outdoor: next.outdoor, indoor: columns.filter(c => set.has(c)) });
+    });
+
+    const swatch = document.createElement('div');
+    swatch.className = 'series-swatch';
+    swatch.style.background = seriesColor(col, i);
+
+    const name = document.createElement('span');
+    name.textContent = col;
+
+    item.append(cb, swatch, name);
+    if (isOutdoor) {
+      const note = document.createElement('span');
+      note.className = 'role-note'; note.textContent = 'outdoor';
+      item.appendChild(note);
+    }
+    list.appendChild(item);
+  });
+
+  // The outdoor dropdown offers everything not already claimed as indoor.
+  sel.innerHTML = '';
+  const none = document.createElement('option');
+  none.value = ''; none.textContent = '— none selected —';
+  sel.appendChild(none);
+  for (const col of columns) {
+    if (cur.indoor.includes(col)) continue;
+    const opt = document.createElement('option');
+    opt.value = col; opt.textContent = col;
+    sel.appendChild(opt);
+  }
+  sel.value = cur.outdoor;
+  sel.onchange = () => {
+    const next = thermalSensors();
+    setThermalSensors({ outdoor: sel.value, indoor: next.indoor.filter(c => c !== sel.value) });
+  };
+}
+
 const SEASON_KEY = 'weather_season_config';
 
 function loadSeasonConfig() {
@@ -1336,6 +1957,7 @@ function renderSeasonUI() {
 
   renderRanges('heat-ranges', 'heat');
   renderRanges('cool-ranges', 'cool');
+  renderSensorConfig();
   updatePassiveInfo(cfg);
   updateSeasonSummary(cfg);
 
@@ -1384,10 +2006,17 @@ function updatePassiveInfo(cfg) {
 function updateSeasonSummary(cfg) {
   const heatCount = cfg.heat.filter(([f, t]) => f && t).length;
   const coolCount = cfg.cool.filter(([f, t]) => f && t).length;
+  const s  = thermalSensors();
   const el = document.getElementById('season-config-summary');
-  el.textContent = (heatCount || coolCount)
-    ? `(${heatCount} heat, ${coolCount} cool range${coolCount !== 1 ? 's' : ''})`
-    : '(not configured — click to set up)';
+
+  const bits = [];
+  if (heatCount || coolCount) bits.push(`${heatCount} heat, ${coolCount} cool`);
+  if (s.indoor.length && s.outdoor) {
+    bits.push(`${s.indoor.length} indoor vs ${s.outdoor}${s.configured ? '' : ' (auto)'}`);
+  } else if (columns.length) {
+    bits.push('sensors not assigned');
+  }
+  el.textContent = bits.length ? `(${bits.join(' · ')})` : '(not configured — click to set up)';
 }
 
 document.getElementById('season-config-toggle').addEventListener('click', () => {
@@ -1443,11 +2072,7 @@ document.querySelectorAll('.analysis-tab').forEach(tab => {
 
 function renderActiveView() {
   if (!allRows.length) return;
-  const filtered = allRows.filter(r => {
-    if (dateFrom && r.ts < dateFrom) return false;
-    if (dateTo   && r.ts > dateTo)   return false;
-    return true;
-  });
+  const filtered = visibleRows();
   if (activeView === 'wind-rose')  renderWindRose(filtered);
   if (activeView === 'diurnal')    renderDiurnal(filtered);
   if (activeView === 'records')    renderRecords(filtered);
@@ -1605,11 +2230,8 @@ function renderRecords(filtered) {
     return !!sample;
   });
 
-  // Skip battery/binary columns
-  const skip = new Set(['Outdoor Battery','Basement Battery']);
-
   for (const col of numericCols) {
-    if (skip.has(col)) continue;
+    if (BATTERY_RE.test(col)) continue;   // status flag, not a measurement
     let hiVal = -Infinity, loVal = Infinity, hiRow = null, loRow = null;
     for (const r of filtered) {
       const v = r[col];
@@ -1677,7 +2299,7 @@ async function storeDirHandle(handle) {
 }
 
 async function loadFromDirHandle(dirHandle) {
-  const allParsed = []; let cols = null; let count = 0;
+  const allParsed = []; let cols = []; let count = 0;
   for await (const entry of dirHandle.values()) {
     if (entry.kind !== 'file' || !entry.name.toLowerCase().endsWith('.csv')) continue;
     count++;
@@ -1685,12 +2307,12 @@ async function loadFromDirHandle(dirHandle) {
     const file = await entry.getFile();
     const text = await file.text();
     const { headers, rows } = parseCSV(text);
-    if (!cols) cols = headers;
+    cols = mergeColumns(cols, headers);
     allParsed.push(...rows);
   }
   if (!count) { fileStatus.textContent = 'No CSV files found in that folder'; return; }
   allParsed.sort((a, b) => a.ts - b.ts);
-  allRows = allParsed; columns = cols || [];
+  allRows = allParsed; columns = cols;
   fileStatus.textContent = `${count} files · ${allRows.length.toLocaleString()} readings`;
   if (allRows.length) {
     const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
@@ -1824,25 +2446,39 @@ function crossCorrAtLags(outdoor, indoor, maxLag) {
 }
 
 function renderThermal(filtered) {
-  const COL_OUT  = 'Outdoor Temperature (°F)';
-  const COL_OFF  = 'Office Temperature (°F)';
-  const COL_BASE = 'Basement Temperature (°F)';
+  const summaryEl = document.getElementById('thermal-summary');
+  const roles     = thermalSensors();
+  const COL_OUT   = roles.outdoor;
 
-  if (!columns.includes(COL_OUT) || (!columns.includes(COL_OFF) && !columns.includes(COL_BASE))) return;
+  // Nothing to model against — say so rather than leaving a blank panel.
+  function explain(msg) {
+    summaryEl.innerHTML =
+      `<div class="interp-card"><div class="interp-card-title">Thermal analysis</div>` +
+      `<ul><li>${msg}</li><li>Open <b>⚙ Configuration</b> above to assign sensors.</li></ul></div>`;
+    for (const id of ['thermal-lag-chart','thermal-residual-chart',
+                      'thermal-scatter-chart','thermal-monthly-chart']) {
+      Plotly.purge(document.getElementById(id));
+    }
+  }
+  if (!COL_OUT)            return explain('No <b>outdoor temperature sensor</b> is selected.');
+  if (!roles.indoor.length) return explain('No <b>indoor temperature sensors</b> are selected.');
 
   // Aggregate to hourly for efficiency (~8k points max vs ~100k)
-  const outHr  = hourlyAgg(filtered, COL_OUT);
-  const offHr  = columns.includes(COL_OFF)  ? hourlyAgg(filtered, COL_OFF)  : null;
-  const baseHr = columns.includes(COL_BASE) ? hourlyAgg(filtered, COL_BASE) : null;
-
+  const outHr   = hourlyAgg(filtered, COL_OUT);
   const MAX_LAG = 24; // hours
 
-  // ── Cross-correlation at lags 0–24h ──────────────────────────────────
-  const offLags  = offHr  ? crossCorrAtLags(outHr, offHr,  MAX_LAG) : [];
-  const baseLags = baseHr ? crossCorrAtLags(outHr, baseHr, MAX_LAG) : [];
-
-  const bestOffLag  = offLags.length  ? offLags.reduce((b, x)  => x.r > b.r ? x : b)  : null;
-  const bestBaseLag = baseLags.length ? baseLags.reduce((b, x) => x.r > b.r ? x : b) : null;
+  // One model per indoor sensor, in the order they appear in the data.
+  const spaces = roles.indoor.map(col => {
+    const hr   = hourlyAgg(filtered, col);
+    const lags = hr ? crossCorrAtLags(outHr, hr, MAX_LAG) : [];
+    return {
+      col,
+      label: col.replace(/\s*\(°F\)\s*$/, ''),
+      color: seriesColor(col, columns.indexOf(col)),
+      hr, lags,
+      best: lags.length ? lags.reduce((b, x) => x.r > b.r ? x : b) : null,
+    };
+  });
 
   // ── HVAC residual (per-space) ─────────────────────────────────────────
   // 1. Smooth outdoor with 4h rolling avg (removes rapid fluctuations)
@@ -1911,12 +2547,14 @@ function renderThermal(filtered) {
     return { residuals, slope, intercept, threshold };
   }
 
-  const offRes  = computeResidual(offHr,  bestOffLag);
-  const baseRes = computeResidual(baseHr, bestBaseLag);
+  for (const sp of spaces) sp.res = computeResidual(sp.hr, sp.best);
+  const modelled = spaces.filter(sp => sp.best && sp.res);
 
   // ── Summary cards ─────────────────────────────────────────────────────
-  const summaryEl = document.getElementById('thermal-summary');
   summaryEl.innerHTML = '';
+  if (!modelled.length) {
+    return explain('The selected sensors have no overlapping readings in this date range.');
+  }
 
   function card(title, stats) {
     const el = document.createElement('div');
@@ -1933,28 +2571,18 @@ function renderThermal(filtered) {
   const isHeat = (pt, threshold) => pt.r > threshold  && (!hasSeasonConfig || pt.season === 'heat');
   const isCool = (pt, threshold) => pt.r < -threshold && (!hasSeasonConfig || pt.season === 'cool');
 
-  if (bestOffLag && offRes) {
-    const coupling = (offRes.slope * 100).toFixed(0);
-    const thr = offRes.threshold;
-    card('🟢 Office vs Outdoor', [
-      ['Best lag', `${bestOffLag.lag}h`, ''],
-      ['Correlation (r)', bestOffLag.r.toFixed(3), ''],
-      ['Thermal coupling', `${coupling}%`, ''],
+  const outLabel = COL_OUT.replace(/\s*\(°F\)\s*$/, '');
+  const dot = c => `<span style="color:${c}">■</span>`;
+
+  for (const sp of modelled) {
+    const thr = sp.res.threshold;
+    card(`${dot(sp.color)} ${sp.label} vs ${outLabel}`, [
+      ['Best lag', `${sp.best.lag}h`, ''],
+      ['Correlation (r)', sp.best.r.toFixed(3), ''],
+      ['Thermal coupling', `${(sp.res.slope * 100).toFixed(0)}%`, ''],
       ['HVAC threshold', `±${thr.toFixed(1)}°F`, ''],
-      ['Heat events detected', offRes.residuals.filter(pt => isHeat(pt, thr)).length, 'hvac-heat'],
-      ['Cool events detected', offRes.residuals.filter(pt => isCool(pt, thr)).length, 'hvac-cool'],
-    ]);
-  }
-  if (bestBaseLag && baseRes) {
-    const coupling = (baseRes.slope * 100).toFixed(0);
-    const thr = baseRes.threshold;
-    card('🔵 Basement vs Outdoor', [
-      ['Best lag', `${bestBaseLag.lag}h`, ''],
-      ['Correlation (r)', bestBaseLag.r.toFixed(3), ''],
-      ['Thermal coupling', `${coupling}%`, ''],
-      ['HVAC threshold', `±${thr.toFixed(1)}°F`, ''],
-      ['Heat events detected', baseRes.residuals.filter(pt => isHeat(pt, thr)).length, 'hvac-heat'],
-      ['Cool events detected', baseRes.residuals.filter(pt => isCool(pt, thr)).length, 'hvac-cool'],
+      ['Heat events detected', sp.res.residuals.filter(pt => isHeat(pt, thr)).length, 'hvac-heat'],
+      ['Cool events detected', sp.res.residuals.filter(pt => isCool(pt, thr)).length, 'hvac-cool'],
     ]);
   }
 
@@ -2003,23 +2631,19 @@ function renderThermal(filtered) {
     summaryEl.appendChild(el);
   }
 
-  if (bestOffLag && offRes) {
-    const thr = offRes.threshold;
-    interpCard('🟢 Office — interpretation', offRes, bestOffLag,
-      offRes.residuals.filter(pt => isHeat(pt, thr)).length,
-      offRes.residuals.filter(pt => isCool(pt, thr)).length);
-  }
-  if (bestBaseLag && baseRes) {
-    const thr = baseRes.threshold;
-    interpCard('🔵 Basement — interpretation', baseRes, bestBaseLag,
-      baseRes.residuals.filter(pt => isHeat(pt, thr)).length,
-      baseRes.residuals.filter(pt => isCool(pt, thr)).length);
+  for (const sp of modelled) {
+    const thr = sp.res.threshold;
+    interpCard(`${dot(sp.color)} ${sp.label} — interpretation`, sp.res, sp.best,
+      sp.res.residuals.filter(pt => isHeat(pt, thr)).length,
+      sp.res.residuals.filter(pt => isCool(pt, thr)).length);
   }
 
   // ── Lag correlation chart ─────────────────────────────────────────────
-  const lagTraces = [];
-  if (offLags.length)  lagTraces.push({ x: offLags.map(d => d.lag),  y: offLags.map(d => d.r),  name: 'Office',   type: 'scatter', mode: 'lines+markers', line: { color: '#22c55e', width: 2 }, marker: { size: 5 } });
-  if (baseLags.length) lagTraces.push({ x: baseLags.map(d => d.lag), y: baseLags.map(d => d.r), name: 'Basement', type: 'scatter', mode: 'lines+markers', line: { color: '#60a5fa', width: 2 }, marker: { size: 5 } });
+  const lagTraces = modelled.map(sp => ({
+    x: sp.lags.map(d => d.lag), y: sp.lags.map(d => d.r), name: sp.label,
+    type: 'scatter', mode: 'lines+markers',
+    line: { color: sp.color, width: 2 }, marker: { size: 5 },
+  }));
 
   const lagLayout = {
     paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
@@ -2028,7 +2652,7 @@ function renderThermal(filtered) {
     title: { text: 'Lag correlation (hours)', font: { size: 11, color: '#7b82a0' }, y: 0.97 },
     xaxis: { title: { text: 'Lag (hours)', standoff: 4 }, gridcolor: '#2e3245', linecolor: '#2e3245', dtick: 4 },
     yaxis: { title: { text: 'r', standoff: 4 }, gridcolor: '#2e3245', linecolor: '#2e3245',
-      range: [Math.min(-0.25, Math.floor(Math.min(...[...offLags, ...baseLags].map(d => d.r)) / 0.25) * 0.25), 1],
+      range: [Math.min(-0.25, Math.floor(Math.min(...modelled.flatMap(sp => sp.lags.map(d => d.r))) / 0.25) * 0.25), 1],
       zeroline: true, zerolinecolor: '#ffffff33', zerolinewidth: 1 },
     legend: { bgcolor: '#0f111700', font: { size: 10 }, orientation: 'h', y: -0.3 },
     hovermode: 'x unified',
@@ -2038,7 +2662,7 @@ function renderThermal(filtered) {
 
   // ── HVAC residual time series ─────────────────────────────────────────
   const resTraces = [];
-  function addResTrace(res, label, heatColor, coolColor) {
+  function addResTrace(res, label, heatColor, coolColor, neutralColor) {
     if (!res) return;
     const thr = res.threshold;
     const posX = [], posY = [], negX = [], negY = [], zeroX = [], zeroY = [];
@@ -2050,7 +2674,7 @@ function renderThermal(filtered) {
     }
     resTraces.push({
       x: zeroX, y: zeroY, name: `${label} neutral`,
-      type: 'scatter', mode: 'lines', line: { color: '#ffffff22', width: 1 },
+      type: 'scatter', mode: 'lines', line: { color: `${neutralColor}33`, width: 1 },
       showlegend: false, hoverinfo: 'skip',
     });
     resTraces.push({
@@ -2062,8 +2686,7 @@ function renderThermal(filtered) {
       type: 'scatter', mode: 'markers', marker: { color: coolColor, size: 3, opacity: 0.7 },
     });
   }
-  addResTrace(offRes,  'Office',   '#f97316', '#38bdf8');
-  addResTrace(baseRes, 'Basement', '#fb923c', '#60a5fa');
+  for (const sp of modelled) addResTrace(sp.res, sp.label, '#f97316', '#38bdf8', sp.color);
 
   const resLayout = {
     paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
@@ -2109,8 +2732,9 @@ function renderThermal(filtered) {
       name: `${label} fit`, type: 'scatter', mode: 'lines',
       line: { color: neutralColor, width: 1.5, dash: 'dash' }, showlegend: false });
   }
-  addScatterTrace(offHr,  offRes,  bestOffLag,  'Office',   '#f97316', '#38bdf8', '#22c55e');
-  addScatterTrace(baseHr, baseRes, bestBaseLag, 'Basement', '#fb923c', '#60a5fa', '#a78bfa');
+  for (const sp of modelled) {
+    addScatterTrace(sp.hr, sp.res, sp.best, sp.label, '#f97316', '#38bdf8', sp.color);
+  }
 
   const scatterLayout = {
     paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
@@ -2138,22 +2762,17 @@ function renderThermal(filtered) {
     const months = [...new Set([...Object.keys(heat), ...Object.keys(cool)])].sort();
     return { months, heatCounts: months.map(m => heat[m] || 0), coolCounts: months.map(m => -(cool[m] || 0)) };
   }
-  const offMonthly  = monthlyHvac(offRes);
-  const baseMonthly = monthlyHvac(baseRes);
-  const allMonths   = [...new Set([...(offMonthly.months || []), ...(baseMonthly.months || [])])].sort();
-
+  // With several spaces, colouring by heat/cool would repeat across series, so
+  // each space keeps its own colour here and the bar's direction carries the
+  // heat/cool distinction: heating counts up, cooling counts down.
   const monthlyTraces = [];
-  if (offMonthly.months) {
-    monthlyTraces.push({ x: offMonthly.months, y: offMonthly.heatCounts, name: 'Office 🔥 heat',
-      type: 'bar', marker: { color: '#f97316cc' } });
-    monthlyTraces.push({ x: offMonthly.months, y: offMonthly.coolCounts, name: 'Office ❄ cool',
-      type: 'bar', marker: { color: '#38bdf8cc' } });
-  }
-  if (baseMonthly.months) {
-    monthlyTraces.push({ x: baseMonthly.months, y: baseMonthly.heatCounts, name: 'Basement 🔥 heat',
-      type: 'bar', marker: { color: '#fb923c66' } });
-    monthlyTraces.push({ x: baseMonthly.months, y: baseMonthly.coolCounts, name: 'Basement ❄ cool',
-      type: 'bar', marker: { color: '#60a5fa66' } });
+  for (const sp of modelled) {
+    const m = monthlyHvac(sp.res);
+    if (!m.months) continue;
+    monthlyTraces.push({ x: m.months, y: m.heatCounts, name: `${sp.label} 🔥 heat`,
+      type: 'bar', marker: { color: `${sp.color}cc` } });
+    monthlyTraces.push({ x: m.months, y: m.coolCounts, name: `${sp.label} ❄ cool`,
+      type: 'bar', marker: { color: `${sp.color}55` } });
   }
 
   const monthlyLayout = {
