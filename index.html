@@ -53,7 +53,7 @@
   .toolbar label { font-size: 12px; color: var(--muted); white-space: nowrap; }
   .divider { width: 1px; height: 22px; background: var(--border); flex-shrink: 0; }
 
-  input[type="date"], input[type="datetime-local"], input[type="number"], input[type="text"] {
+  input[type="date"], input[type="datetime-local"], input[type="text"] {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -62,7 +62,6 @@
     font-size: 12px;
   }
   input[type="date"], input[type="datetime-local"] { cursor: pointer; }
-  input[type="number"] { width: 80px; }
   input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 
   .btn {
@@ -111,42 +110,6 @@
   .file-label:hover { border-color: var(--accent); }
   #file-input { display: none; }
   #file-status { font-size: 11px; color: var(--muted); }
-
-  /* ── Forecast toolbar ─────────────────────────────────────── */
-  .forecast-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 20px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
-    flex-wrap: wrap;
-    flex-shrink: 0;
-  }
-  .forecast-bar label { font-size: 12px; color: var(--muted); }
-
-  .model-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 10px;
-    border-radius: 5px;
-    border: 1px solid var(--border);
-    background: var(--bg);
-    color: var(--muted);
-    font-size: 11px;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: border-color 0.15s, color 0.15s;
-  }
-  .model-btn:hover { color: var(--text); }
-  .model-btn.active { color: var(--text); }
-  .model-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-
-  .loc-fields { display: flex; align-items: center; gap: 6px; margin-left: auto; }
-  .loc-fields span { font-size: 11px; color: var(--muted); }
-
-  #forecast-status { font-size: 11px; color: var(--muted); }
 
   /* ── Main layout ──────────────────────────────────────────── */
   .main { display: flex; flex: 1; overflow: hidden; }
@@ -612,7 +575,7 @@
   <span id="data-range-label"></span>
 </header>
 
-<!-- Row 1: data loading + date range -->
+<!-- Toolbar: data loading + date range -->
 <div class="toolbar">
   <label for="file-input">
     <span class="file-label">
@@ -663,33 +626,6 @@
     Anomalies
     <span id="anomaly-count"></span>
   </button>
-</div>
-
-<!-- Row 2: model forecasts -->
-<div class="forecast-bar">
-  <label>Forecasts:</label>
-  <button class="model-btn" id="model-ecmwf-ifs" data-model="ecmwf_ifs_seamless" data-label="ECMWF IFS">
-    <span class="model-dot" style="background:#f97316"></span>ECMWF IFS
-  </button>
-  <button class="model-btn" id="model-ecmwf-aifs" data-model="ecmwf_aifs025" data-label="ECMWF AIFS">
-    <span class="model-dot" style="background:#a855f7"></span>ECMWF AIFS
-  </button>
-  <button class="model-btn" id="model-hrrr" data-model="hrrr_conus" data-label="HRRR">
-    <span class="model-dot" style="background:#ef4444"></span>HRRR
-  </button>
-  <button class="model-btn" id="model-aigfs" data-model="aigfs025" data-label="NOAA AIGFS">
-    <span class="model-dot" style="background:#06b6d4"></span>NOAA AIGFS
-  </button>
-
-  <span id="forecast-status"></span>
-
-  <div class="loc-fields">
-    <span>Lat</span>
-    <input type="number" id="lat-input" placeholder="39.7392" step="0.0001" value="39.970835">
-    <span>Lon</span>
-    <input type="number" id="lon-input" placeholder="-104.9903" step="0.0001" value="-105.264903">
-    <button class="btn" id="fetch-forecast-btn">Fetch</button>
-  </div>
 </div>
 
 <div class="main">
@@ -1048,24 +984,6 @@ function mergeColumns(existing, headers) {
   return merged;
 }
 
-// ── Open-Meteo model config ─────────────────────────────────────────────
-const MODELS = {
-  ecmwf_ifs_seamless: { label: 'ECMWF IFS',  color: '#f97316', dash: 'dash' },
-  ecmwf_aifs025:      { label: 'ECMWF AIFS', color: '#a855f7', dash: 'dot'  },
-  hrrr_conus:         { label: 'HRRR',       color: '#ef4444', dash: 'dashdot' },
-  aigfs025:           { label: 'NOAA AIGFS', color: '#06b6d4', dash: 'longdash' },
-};
-
-// Map Open-Meteo hourly var → station column name
-const FORECAST_VAR_MAP = {
-  temperature_2m:      'Outdoor Temperature (°F)',
-  relative_humidity_2m:'Humidity (%)',
-  wind_speed_10m:      'Wind Speed (mph)',
-  wind_gusts_10m:      'Wind Gust (mph)',
-  shortwave_radiation: 'Solar Radiation (W/m^2)',
-};
-const OPEN_METEO_VARS = Object.keys(FORECAST_VAR_MAP).join(',');
-
 // ── State ───────────────────────────────────────────────────────────────
 let allRows      = [];
 let columns      = [];
@@ -1073,8 +991,6 @@ let checkedCols  = new Set();
 let dateFrom     = null;
 let dateTo       = null;
 let showAnomalies = false;
-let activeModels  = new Set();
-let forecastData  = {};   // { modelKey: { times: [], vars: { colName: [] } } }
 
 // ── DOM ─────────────────────────────────────────────────────────────────
 const fileInput      = document.getElementById('file-input');
@@ -1099,10 +1015,6 @@ const dataRangeLabel = document.getElementById('data-range-label');
 const anomalyBtn     = document.getElementById('anomaly-btn');
 const anomalyCount   = document.getElementById('anomaly-count');
 const anomalyLegend  = document.getElementById('anomaly-legend');
-const forecastStatus = document.getElementById('forecast-status');
-const latInput       = document.getElementById('lat-input');
-const lonInput       = document.getElementById('lon-input');
-const fetchForecastBtn = document.getElementById('fetch-forecast-btn');
 const exportBtn        = document.getElementById('export-btn');
 const statsBar         = document.getElementById('stats-bar');
 
@@ -1528,89 +1440,6 @@ function detectAnomalies(values) {
   return indices;
 }
 
-// ── Forecast: model button toggles ──────────────────────────────────────
-document.querySelectorAll('.model-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const modelKey = btn.dataset.model;
-    if (activeModels.has(modelKey)) {
-      activeModels.delete(modelKey);
-      btn.classList.remove('active');
-    } else {
-      activeModels.add(modelKey);
-      btn.classList.add('active');
-    }
-    renderChart();
-  });
-});
-
-fetchForecastBtn.addEventListener('click', fetchForecasts);
-
-async function fetchForecasts() {
-  const lat = parseFloat(latInput.value);
-  const lon = parseFloat(lonInput.value);
-  if (isNaN(lat) || isNaN(lon)) {
-    forecastStatus.textContent = '⚠ Enter lat/lon first';
-    return;
-  }
-  if (!activeModels.size) {
-    forecastStatus.textContent = '⚠ Select at least one model above';
-    return;
-  }
-
-  forecastData = {};
-  const modelsToFetch = [...activeModels];
-
-  for (const modelKey of modelsToFetch) {
-    const cfg = MODELS[modelKey];
-    forecastStatus.textContent = `Fetching ${cfg.label}…`;
-    try {
-      const url = new URL('https://api.open-meteo.com/v1/forecast');
-      url.searchParams.set('latitude',         lat);
-      url.searchParams.set('longitude',        lon);
-      url.searchParams.set('hourly',           OPEN_METEO_VARS);
-      url.searchParams.set('temperature_unit', 'fahrenheit');
-      url.searchParams.set('wind_speed_unit',  'mph');
-      url.searchParams.set('precipitation_unit','inch');
-      url.searchParams.set('forecast_days',    '10');
-      url.searchParams.set('models',           modelKey);
-      url.searchParams.set('timezone',         'UTC');
-
-      const r = await fetch(url);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-
-      const times = (data.hourly?.time ?? []).map(t => new Date(t + 'Z'));
-      const vars  = {};
-      for (const [omVar, colName] of Object.entries(FORECAST_VAR_MAP)) {
-        const raw = data.hourly?.[omVar];
-        if (raw) vars[colName] = raw;
-      }
-      forecastData[modelKey] = { times, vars };
-    } catch (err) {
-      console.warn(`Failed to fetch ${modelKey}:`, err);
-      forecastStatus.textContent = `✗ ${cfg.label}: ${err.message}`;
-    }
-  }
-
-  const fetched = Object.keys(forecastData).map(k => MODELS[k].label);
-  forecastStatus.textContent = fetched.length
-    ? `✓ ${fetched.join(', ')}`
-    : 'No forecast data';
-
-  // Auto-zoom: last 14 days of observations + 10-day forecast
-  if (allRows.length && fetched.length) {
-    const now    = new Date();
-    const start  = new Date(now.getTime() - 14 * 86400 * 1000);
-    const endFc  = new Date(now.getTime() + 10 * 86400 * 1000);
-    dateFrom     = start;
-    dateTo       = endFc;
-    dateFromEl.value = toDateTimeInput(start);
-    dateToEl.value   = toDateTimeInput(endFc);
-  }
-
-  renderChart();
-}
-
 // ── Chart rendering ──────────────────────────────────────────────────────
 let chartRendered = false;
 
@@ -1683,29 +1512,6 @@ function renderChart() {
     anomalyCount.style.display = 'none';
   }
 
-  // ── Forecast traces ────────────────────────────────────────────────
-  for (const [modelKey, fd] of Object.entries(forecastData)) {
-    if (!activeModels.has(modelKey)) continue;
-    const cfg = MODELS[modelKey];
-    console.log(`Rendering forecast: ${modelKey}, times: ${fd.times.length}, vars:`, Object.keys(fd.vars));
-
-    for (const col of checkedCols) {
-      if (!fd.vars[col]) continue;
-      console.log(`  Adding trace for ${col}: ${fd.vars[col].length} points`);
-
-      traces.push({
-        x: fd.times,
-        y: fd.vars[col],
-        name: `${cfg.label} — ${col}`,
-        type: 'scatter',          // NOT scattergl — WebGL drops dash styles
-        mode: 'lines',
-        line: { color: cfg.color, width: 2.5, dash: cfg.dash },
-        opacity: 0.9,
-        connectgaps: false,
-      });
-    }
-  }
-
   // ── Layout ────────────────────────────────────────────────────────
   const layout = {
     paper_bgcolor: '#0f1117',
@@ -1726,22 +1532,6 @@ function renderChart() {
     },
     hovermode: 'x unified',
     hoverlabel: { bgcolor: '#1a1d27', bordercolor: '#2e3245', font: { color: '#e2e6f0', size: 11 } },
-    // Vertical "now" line when forecast is shown
-    ...(Object.keys(forecastData).length ? {
-      shapes: [{
-        type: 'line', xref: 'x', yref: 'paper',
-        x0: new Date().toISOString(), x1: new Date().toISOString(),
-        y0: 0, y1: 1,
-        line: { color: '#ffffff33', width: 1, dash: 'dot' },
-      }],
-      annotations: [{
-        xref: 'x', yref: 'paper',
-        x: new Date().toISOString(), y: 1,
-        text: 'now', showarrow: false,
-        font: { color: '#ffffff55', size: 10 },
-        xanchor: 'left', yanchor: 'top',
-      }],
-    } : {}),
   };
 
   const config = {

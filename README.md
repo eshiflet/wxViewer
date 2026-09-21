@@ -13,8 +13,7 @@ wxViewer loads CSV files exported from an Ambient Weather station (or any compat
 ### Main chart
 
 - Plot any combination of your station's data series over time — temperature, humidity, pressure, wind, rain, UV index, solar radiation, and more
-- Selectable date range via date pickers, quick-range buttons (7d / 30d / 90d / All), or by drag-selecting directly on the chart
-- Overlay weather model **forecasts** for your location: ECMWF IFS, ECMWF AIFS, HRRR, and NOAA AIGFS — fetched live from the [Open-Meteo API](https://open-meteo.com/)
+- Selectable date range via date pickers, quick-range buttons (1d / 7d / 30d / 90d / All), or by drag-selecting directly on the chart
 - **Anomaly detection** — highlights statistically unusual readings using Tukey IQR fences
 - Min / avg / max stats bar for the selected time window
 - Export the current filtered view to CSV
@@ -111,6 +110,5 @@ rather than appended.
 ## Tech
 
 - [Plotly.js](https://plotly.com/javascript/) — charting
-- [Open-Meteo](https://open-meteo.com/) — free weather forecast API
 - [File System Access API](https://developer.mozilla.org/en-US/docs/Web/API/File_System_Access_API) — local folder access
 - No frameworks, no build step, no data leaves your browser
