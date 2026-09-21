@@ -16,6 +16,10 @@ wxViewer loads CSV files exported from an Ambient Weather station (or any compat
 - Selectable date range via date pickers, quick-range buttons (1d / 7d / 30d / 90d / All), or by drag-selecting directly on the chart
 - **Anomaly detection** — highlights statistically unusual readings using Tukey IQR fences
 - Min / avg / max stats bar for the selected time window
+- Click any series' colour dot to recolour it; the choice is remembered in your browser
+- **Ignore periods** — hide a stretch of readings you know are wrong, per series (a newly
+  installed sensor still reaching equilibrium, or one that misbehaved for a while).
+  Nothing is deleted: clear the bound and the readings come back
 - Export the current filtered view to CSV
 
 ### Analysis panel
@@ -39,7 +43,16 @@ Models your home as a thermal circuit and quantifies how indoor temperatures res
 - **HVAC residual time series** — deviations from the passive thermal model identify when heating or cooling was running
 - **Monthly HVAC activity** — bar chart of estimated heating and cooling hours per month
 
-The thermal model is trained on **passive periods** (when neither heat nor AC is running) to learn the house's true natural thermal response. You can configure your heating and cooling seasons in the **⚙ Season Configuration** section so the algorithm uses labeled ground-truth data instead of the built-in RANSAC estimator.
+The thermal model is trained on **passive periods** (when neither heat nor AC is running) to
+learn the house's true natural thermal response. The **⚙ Configuration** section at the top of
+the tab controls two things:
+
+- **Heating / cooling seasons** — whole-day ranges saying which mode the HVAC was in. These
+  are labels about mode, not runtime; working out when it actually ran inside those days is
+  the model's job. Given them, the regression trains on labelled ground truth instead of the
+  built-in RANSAC estimator
+- **Sensor roles** — which channels are indoor spaces and which one is the outdoor reference.
+  Each indoor sensor is modelled separately. Unset, the app guesses from the column names
 
 ---
 
@@ -70,40 +83,26 @@ Then open [http://localhost:5201](http://localhost:5201).
 
 CSV files must have a header row. The first column should be a date/time field. wxViewer auto-detects the column names and units from the headers — it works out of the box with Ambient Weather Network CSV exports.
 
+Files need not all share the same columns. Add a sensor to your station partway through and
+only the exports after that date will carry it; wxViewer merges the column sets across every
+file it loads, so the new channel appears as a series that simply starts when it starts.
+
 ---
 
 ## HVAC monitoring
 
-The Thermal Analysis panel currently *infers* when heating and cooling ran, from
-deviations against the passive thermal model. Real HVAC on/off state would be better
-ground truth — it would let the model train on labeled data rather than a RANSAC
-estimate.
+The Thermal Analysis panel *infers* when heating and cooling ran, from deviations against
+the passive thermal model. That works without any extra hardware, and labelling your
+heating and cooling seasons sharpens it considerably.
 
-### Amazon Smart Thermostat — not possible
+For definitive events rather than inferred ones, add a temperature probe in the HVAC
+supply trunk and let it come through as an ordinary channel in the CSV. Duct air sits near
+room temperature when nothing is running, climbs while the furnace burns and drops sharply
+under cooling, so the trace reads out actual cycles instead of estimating them.
 
-The `alexa-poller/` directory holds an abandoned attempt to read HVAC state from an
-Amazon Smart Thermostat via the Alexa API. **It does not work and cannot be made to
-work.**
-
-The HVAC running-state properties (`primaryHeaterOperation`, `coolerOperation`) belong to
-an interface that device manufacturers implement to report *to* Alexa for its energy
-dashboard. There is no direction in which a consumer reads them back out, and Amazon
-publishes no consumer API for thermostat state at all. The Home Assistant community hit
-the same wall — there is no HA integration for this thermostat, for this reason.
-
-The code is kept only as a record. See [`alexa-poller/SETUP.md`](alexa-poller/SETUP.md)
-for the full findings.
-
-### CT clamps — the working alternative
-
-Measuring the HVAC circuits directly sidesteps the vendor entirely: a current transformer
-clamp around the condenser and air handler conductors reports actual draw, which gives
-unambiguous on/off state and, from the magnitude, which stage is running.
-
-Nothing is wired up yet. Note that connecting such a feed will need a change to the CSV
-loader: it currently concatenates rows from every file and takes its column set from the
-first file only, so a second CSV of HVAC readings would need to be joined on timestamp
-rather than appended.
+Such a channel is a temperature series like any other: it charts, it gets records, and it
+can be picked in the Configuration section. Note that its numbers describe duct air rather
+than a room, so its lag and coupling figures aren't comparable to a living space.
 
 ---
 

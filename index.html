@@ -681,7 +681,7 @@
           <div id="diurnal-chart" style="flex:1;min-width:0"></div>
         </div>
         <div class="analysis-view" id="view-thermal" style="flex-direction:column;overflow-y:auto">
-          <!-- Season configuration -->
+          <!-- Configuration: heating/cooling seasons + sensor roles -->
           <div class="season-config" id="season-config">
             <div class="season-config-header" id="season-config-toggle">
               <span class="caret">▶</span>
@@ -1018,6 +1018,18 @@ const anomalyLegend  = document.getElementById('anomaly-legend');
 const exportBtn        = document.getElementById('export-btn');
 const statsBar         = document.getElementById('stats-bar');
 
+// The header's one-line description of what is loaded: where it came from,
+// how much of it there is, and what span it covers. `source` is the only part
+// the caller knows — the rest is read back off allRows so it can never drift
+// from the data actually in hand.
+function updateDatasetLabel(source) {
+  if (!allRows.length) { dataRangeLabel.textContent = ''; return; }
+  const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
+  dataRangeLabel.textContent =
+    `Dataset: ${source} · ${allRows.length.toLocaleString()} readings`
+    + ` · ${fmtDate(first)} – ${fmtDate(last)}`;
+}
+
 // ── CSV Parser ──────────────────────────────────────────────────────────
 function parseCSV(text) {
   const lines = text.split('\n').filter(l => l.trim());
@@ -1070,14 +1082,14 @@ fileInput.addEventListener('change', async e => {
   allParsed.sort((a, b) => a.ts - b.ts);
   allRows = allParsed; columns = cols;
 
-  fileStatus.textContent = `${files.length} file${files.length > 1 ? 's' : ''} · ${allRows.length.toLocaleString()} readings`;
+  fileStatus.textContent = '';
+  updateDatasetLabel(`${files.length} file${files.length > 1 ? 's' : ''}`);
 
   if (allRows.length) {
     const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
     dateFrom = first; dateTo = last;
     dateFromEl.value = toDateTimeInput(first);
     dateToEl.value   = toDateTimeInput(last);
-    dataRangeLabel.textContent = `${fmtDate(first)} – ${fmtDate(last)}`;
   }
   buildSidebar();
   showLoading(false);
@@ -1103,13 +1115,13 @@ document.getElementById('sample-data-btn').addEventListener('click', async () =>
     const { headers, rows } = parseCSV(text);
     rows.sort((a, b) => a.ts - b.ts);
     allRows = rows; columns = headers;
-    fileStatus.textContent = `Sample data (Aug 2026) · ${allRows.length.toLocaleString()} readings`;
+    fileStatus.textContent = '';
+    updateDatasetLabel('Sample data');
     if (allRows.length) {
       const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
       dateFrom = first; dateTo = last;
       dateFromEl.value = toDateTimeInput(first);
       dateToEl.value   = toDateTimeInput(last);
-      dataRangeLabel.textContent = `${fmtDate(first)} – ${fmtDate(last)}`;
     }
     buildSidebar();
     showLoading(false);
@@ -1605,7 +1617,6 @@ function updateStatsBar(filtered) {
   });
 }
 
-// ── Season configuration ─────────────────────────────────────────────────
 // ── Thermal sensor roles ────────────────────────────────────────────────
 // Which channel is "outdoor" and which are "indoor" depends entirely on one
 // person's station, so the choice lives in this browser. Until someone
@@ -1716,6 +1727,7 @@ function renderSensorConfig() {
   };
 }
 
+// ── Heating / cooling seasons ───────────────────────────────────────────
 const SEASON_KEY = 'weather_season_config';
 
 function loadSeasonConfig() {
@@ -2121,13 +2133,13 @@ async function loadFromDirHandle(dirHandle) {
   if (!count) { fileStatus.textContent = 'No CSV files found in that folder'; return; }
   allParsed.sort((a, b) => a.ts - b.ts);
   allRows = allParsed; columns = cols;
-  fileStatus.textContent = `${count} files · ${allRows.length.toLocaleString()} readings`;
+  fileStatus.textContent = '';
+  updateDatasetLabel(`${count} file${count > 1 ? 's' : ''}`);
   if (allRows.length) {
     const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
     dateFrom = first; dateTo = last;
     dateFromEl.value = toDateTimeInput(first);
     dateToEl.value   = toDateTimeInput(last);
-    dataRangeLabel.textContent = `${fmtDate(first)} – ${fmtDate(last)}`;
   }
   buildSidebar();
   showLoading(false);

@@ -2,11 +2,6 @@
 *.csv
 !sample-data.csv
 
-# Alexa poller credentials and database
-alexa-poller/config.json
-alexa-poller/hvac_data.db
-alexa-poller/poller.log
-
 # Python
 __pycache__/
 *.pyc
