@@ -1242,7 +1242,7 @@ function buildSidebar() {
     swatch.title = 'Change colour';
     swatch.addEventListener('click', e => {
       e.preventDefault(); e.stopPropagation();
-      openColorPicker(col, i, swatch);
+      toggleColorPicker(col, i, swatch);
     });
 
     const name = document.createElement('span');
@@ -1299,6 +1299,17 @@ function refreshSwatches() {
       if (sw) sw.style.background = seriesColor(columns[i], i);
     });
   }
+}
+
+// Clicking the swatch that opened the picker closes it again — the way out
+// without choosing a colour. Clicking a different swatch moves the picker
+// to that series rather than closing it.
+function toggleColorPicker(col, i, anchor) {
+  if (colorPop.classList.contains('visible') && colorTarget && colorTarget.col === col) {
+    closeColorPicker();
+    return;
+  }
+  openColorPicker(col, i, anchor);
 }
 
 function openColorPicker(col, i, anchor) {
