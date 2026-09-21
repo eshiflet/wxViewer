@@ -633,6 +633,7 @@
   <input type="date" id="date-to">
   <button class="btn" id="apply-btn">Apply</button>
   <button class="btn secondary" id="all-btn">All</button>
+  <button class="btn secondary" data-days="1">1d</button>
   <button class="btn secondary" data-days="7">7d</button>
   <button class="btn secondary" data-days="30">30d</button>
   <button class="btn secondary" data-days="90">90d</button>
@@ -1469,7 +1470,7 @@ allBtn.addEventListener('click', () => {
   if (analysisPanel.classList.contains('visible')) renderActiveView();
 });
 
-// Quick-range buttons: 7d / 30d / 90d
+// Quick-range buttons: 1d / 7d / 30d / 90d
 document.querySelectorAll('[data-days]').forEach(btn => {
   btn.addEventListener('click', () => {
     if (!allRows.length) return;
@@ -2810,7 +2811,14 @@ function showLoading(v, msg = 'Processing…') {
   loadingMsg.textContent  = msg;
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function toDateInput(d) { return d.toISOString().slice(0, 10); }
+// The <input type="date"> boxes are read back as LOCAL time by Apply, so they
+// have to be written in local time too. toISOString() formats in UTC, which
+// put a reading taken after 6pm Mountain on the following day and made Apply
+// act on a range the chart was never showing.
+function toDateInput(d) {
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 function fmtDate(d) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
