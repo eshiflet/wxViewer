@@ -2265,163 +2265,158 @@ function crossCorrAtLags(outdoor, indoor, maxLag) {
   return results;
 }
 
-function renderThermal(filtered) {
-  const summaryEl = document.getElementById('thermal-summary');
-  const roles     = thermalSensors();
-  const COL_OUT   = roles.outdoor;
+const THERMAL_MAX_LAG   = 24;   // hours to search for the outdoor→indoor lag
+const THERMAL_CHART_IDS = ['thermal-lag-chart', 'thermal-residual-chart',
+                           'thermal-scatter-chart', 'thermal-monthly-chart'];
+const THERMAL_PLOT_CFG  = { responsive: true, displaylogo: false, displayModeBar: false };
 
-  // Nothing to model against — say so rather than leaving a blank panel.
-  function explain(msg) {
-    summaryEl.innerHTML =
-      `<div class="interp-card"><div class="interp-card-title">Thermal analysis</div>` +
-      `<ul><li>${msg}</li><li>Open <b>⚙ Configuration</b> above to assign sensors.</li></ul></div>`;
-    for (const id of ['thermal-lag-chart','thermal-residual-chart',
-                      'thermal-scatter-chart','thermal-monthly-chart']) {
-      Plotly.purge(document.getElementById(id));
-    }
-  }
-  if (!COL_OUT)            return explain('No <b>outdoor temperature sensor</b> is selected.');
-  if (!roles.indoor.length) return explain('No <b>indoor temperature sensors</b> are selected.');
+// "Basement Temperature (°F)" → "Basement Temperature"
+function stripUnit(col) { return col.replace(/\s*\(°F\)\s*$/, ''); }
 
-  // Aggregate to hourly for efficiency (~8k points max vs ~100k)
-  const outHr   = hourlyAgg(filtered, COL_OUT);
-  const MAX_LAG = 24; // hours
+function colorDot(c) { return `<span style="color:${c}">■</span>`; }
 
-  // One model per indoor sensor, in the order they appear in the data.
-  const spaces = roles.indoor.map(col => {
+// Nothing can be modelled — say why rather than leaving a blank panel.
+function explainThermal(summaryEl, msg) {
+  summaryEl.innerHTML =
+    `<div class="interp-card"><div class="interp-card-title">Thermal analysis</div>` +
+    `<ul><li>${msg}</li><li>Open <b>⚙ Configuration</b> above to assign sensors.</li></ul></div>`;
+  for (const id of THERMAL_CHART_IDS) Plotly.purge(document.getElementById(id));
+}
+
+// One candidate model per indoor sensor, in the order the columns appear.
+// `best` is the lag at which the space tracks outdoor most closely, or null
+// when there are too few overlapping hours to say.
+function buildThermalSpaces(filtered, outHr, indoorCols) {
+  return indoorCols.map(col => {
     const hr   = hourlyAgg(filtered, col);
-    const lags = hr ? crossCorrAtLags(outHr, hr, MAX_LAG) : [];
+    const lags = hr ? crossCorrAtLags(outHr, hr, THERMAL_MAX_LAG) : [];
     return {
       col,
-      label: col.replace(/\s*\(°F\)\s*$/, ''),
+      label: stripUnit(col),
       color: seriesColor(col, columns.indexOf(col)),
       hr, lags,
       best: lags.length ? lags.reduce((b, x) => x.r > b.r ? x : b) : null,
     };
   });
+}
 
-  // ── HVAC residual (per-space) ─────────────────────────────────────────
-  // 1. Smooth outdoor with 4h rolling avg (removes rapid fluctuations)
-  const outSmooth = rollingAvg(outHr, 4);
-
-  const seasonCfg = loadSeasonConfig();
-  const hasSeasonConfig = seasonCfg.heat.some(([f,t])=>f&&t) || seasonCfg.cool.some(([f,t])=>f&&t);
-
-  function computeResidual(indoorHr, bestLag) {
-    if (!indoorHr || !bestLag) return null;
-    const lag = bestLag.lag;
-    const n   = Math.min(outHr.length - lag, indoorHr.length - lag);
-    const xs  = [], ys = [], ts = [], seasons = [];
-    for (let i = 0; i < n; i++) {
-      const x = outSmooth[i], y = indoorHr[i + lag]?.v;
-      if (x != null && y != null) {
-        xs.push(x); ys.push(y); ts.push(indoorHr[i + lag].ts);
-        seasons.push(hasSeasonConfig ? classifyDate(indoorHr[i + lag].ts, seasonCfg) : null);
-      }
+// How far a space sits from what outdoor temperature alone predicts. The
+// regression is fitted on passive hours only — labelled ones when seasons are
+// configured, otherwise ones RANSAC has not yet rejected — so HVAC activity
+// shows up as a residual instead of being absorbed into the baseline.
+function computeThermalResidual(outHr, outSmooth, indoorHr, bestLag, seasonCfg, hasSeasons) {
+  if (!indoorHr || !bestLag) return null;
+  const lag = bestLag.lag;
+  const n   = Math.min(outHr.length - lag, indoorHr.length - lag);
+  const xs  = [], ys = [], ts = [], seasons = [];
+  for (let i = 0; i < n; i++) {
+    const x = outSmooth[i], y = indoorHr[i + lag]?.v;
+    if (x != null && y != null) {
+      xs.push(x); ys.push(y); ts.push(indoorHr[i + lag].ts);
+      seasons.push(hasSeasons ? classifyDate(indoorHr[i + lag].ts, seasonCfg) : null);
     }
+  }
 
-    let slope, intercept, mask;
+  let slope, intercept, mask;
 
-    if (hasSeasonConfig) {
-      // Train regression ONLY on passive periods — user-labeled ground truth
-      const pxs = xs.filter((_, i) => seasons[i] === 'passive');
-      const pys = ys.filter((_, i) => seasons[i] === 'passive');
-      if (pxs.length >= 10) {
-        ({ slope, intercept } = linReg(pxs, pys));
-      } else {
-        // Not enough passive data, fall through to RANSAC
-        ({ slope, intercept } = linReg(xs, ys));
-      }
-      mask = seasons.map(s => s === 'passive' ? 1 : 0);
+  if (hasSeasons) {
+    // Train regression ONLY on passive periods — user-labeled ground truth
+    const pxs = xs.filter((_, i) => seasons[i] === 'passive');
+    const pys = ys.filter((_, i) => seasons[i] === 'passive');
+    if (pxs.length >= 10) {
+      ({ slope, intercept } = linReg(pxs, pys));
     } else {
-      // RANSAC-style iterative passive-only regression (fallback when no config)
-      const ITERATIONS = 6;
-      mask = new Uint8Array(xs.length).fill(1);
-      for (let iter = 0; iter < ITERATIONS; iter++) {
-        const pxs = xs.filter((_, i) => mask[i]);
-        const pys = ys.filter((_, i) => mask[i]);
-        if (pxs.length < 10) break;
-        ({ slope, intercept } = linReg(pxs, pys));
-        const resAll = xs.map((x, i) => ys[i] - (slope * x + intercept));
-        const passiveRes = resAll.filter((_, i) => mask[i]);
-        const sorted = [...passiveRes].sort((a, b) => a - b);
-        const q1 = sorted[Math.floor(sorted.length * 0.25)];
-        const q3 = sorted[Math.floor(sorted.length * 0.75)];
-        const fence = Math.max(1.5, (q3 - q1) * 1.5);
-        mask = new Uint8Array(resAll.map(r => Math.abs(r) <= fence ? 1 : 0));
-      }
+      // Not enough passive data, fall through to RANSAC
+      ({ slope, intercept } = linReg(xs, ys));
     }
-
-    const residuals = xs.map((x, i) => ({
-      ts: ts[i],
-      r: ys[i] - (slope * x + intercept),
-      season: seasons[i], // 'heat' | 'cool' | 'passive' | null
-    }));
-
-    // Threshold from IQR of passive residuals
-    const passiveR = residuals.filter((_, i) => (mask[i] === 1 || mask[i] === true)).map(d => d.r);
-    const ps = [...passiveR].sort((a, b) => a - b);
-    const pq1 = ps[Math.floor(ps.length * 0.25)];
-    const pq3 = ps[Math.floor(ps.length * 0.75)];
-    const threshold = Math.max(1.0, (pq3 - pq1) * 1.5);
-    return { residuals, slope, intercept, threshold };
+    mask = seasons.map(s => s === 'passive' ? 1 : 0);
+  } else {
+    // RANSAC-style iterative passive-only regression (fallback when no config)
+    const ITERATIONS = 6;
+    mask = new Uint8Array(xs.length).fill(1);
+    for (let iter = 0; iter < ITERATIONS; iter++) {
+      const pxs = xs.filter((_, i) => mask[i]);
+      const pys = ys.filter((_, i) => mask[i]);
+      if (pxs.length < 10) break;
+      ({ slope, intercept } = linReg(pxs, pys));
+      const resAll = xs.map((x, i) => ys[i] - (slope * x + intercept));
+      const passiveRes = resAll.filter((_, i) => mask[i]);
+      const sorted = [...passiveRes].sort((a, b) => a - b);
+      const q1 = sorted[Math.floor(sorted.length * 0.25)];
+      const q3 = sorted[Math.floor(sorted.length * 0.75)];
+      const fence = Math.max(1.5, (q3 - q1) * 1.5);
+      mask = new Uint8Array(resAll.map(r => Math.abs(r) <= fence ? 1 : 0));
+    }
   }
 
-  for (const sp of spaces) sp.res = computeResidual(sp.hr, sp.best);
-  const modelled = spaces.filter(sp => sp.best && sp.res);
+  const residuals = xs.map((x, i) => ({
+    ts: ts[i],
+    r: ys[i] - (slope * x + intercept),
+    season: seasons[i], // 'heat' | 'cool' | 'passive' | null
+  }));
 
-  // ── Summary cards ─────────────────────────────────────────────────────
-  summaryEl.innerHTML = '';
-  if (!modelled.length) {
-    return explain('The selected sensors have no overlapping readings in this date range.');
-  }
+  // Threshold from IQR of passive residuals
+  const passiveR = residuals.filter((_, i) => (mask[i] === 1 || mask[i] === true)).map(d => d.r);
+  const ps = [...passiveR].sort((a, b) => a - b);
+  const pq1 = ps[Math.floor(ps.length * 0.25)];
+  const pq3 = ps[Math.floor(ps.length * 0.75)];
+  const threshold = Math.max(1.0, (pq3 - pq1) * 1.5);
+  return { residuals, slope, intercept, threshold };
+}
 
-  function card(title, stats) {
-    const el = document.createElement('div');
-    el.className = 'thermal-card';
-    el.innerHTML = `<div class="thermal-card-title">${title}</div>` +
-      stats.map(([label, val, cls]) =>
-        `<div class="thermal-card-stat"><span>${label}</span><b class="${cls||''}">${val}</b></div>`
-      ).join('');
-    summaryEl.appendChild(el);
-  }
+// When season config is active: heat residuals only count in heating periods,
+// cool residuals only in cooling periods, and passive periods flag neither.
+function hvacEventTests(hasSeasons) {
+  return {
+    isHeat: (pt, threshold) => pt.r >  threshold && (!hasSeasons || pt.season === 'heat'),
+    isCool: (pt, threshold) => pt.r < -threshold && (!hasSeasons || pt.season === 'cool'),
+  };
+}
 
-  // When season config is active: heat residuals only count in heating periods,
-  // cool residuals only in cooling periods, and passive periods flag neither.
-  const isHeat = (pt, threshold) => pt.r > threshold  && (!hasSeasonConfig || pt.season === 'heat');
-  const isCool = (pt, threshold) => pt.r < -threshold && (!hasSeasonConfig || pt.season === 'cool');
+function thermalCard(summaryEl, title, stats) {
+  const el = document.createElement('div');
+  el.className = 'thermal-card';
+  el.innerHTML = `<div class="thermal-card-title">${title}</div>` +
+    stats.map(([label, val, cls]) =>
+      `<div class="thermal-card-stat"><span>${label}</span><b class="${cls||''}">${val}</b></div>`
+    ).join('');
+  summaryEl.appendChild(el);
+}
 
-  const outLabel = COL_OUT.replace(/\s*\(°F\)\s*$/, '');
-  const dot = c => `<span style="color:${c}">■</span>`;
-
+// One figures card per space, then a legend for what the numbers mean.
+function renderThermalSummaryCards(summaryEl, modelled, outLabel, hasSeasons, ev) {
   for (const sp of modelled) {
     const thr = sp.res.threshold;
-    card(`${dot(sp.color)} ${sp.label} vs ${outLabel}`, [
+    thermalCard(summaryEl, `${colorDot(sp.color)} ${sp.label} vs ${outLabel}`, [
       ['Best lag', `${sp.best.lag}h`, ''],
       ['Correlation (r)', sp.best.r.toFixed(3), ''],
       ['Thermal coupling', `${(sp.res.slope * 100).toFixed(0)}%`, ''],
       ['HVAC threshold', `±${thr.toFixed(1)}°F`, ''],
-      ['Heat events detected', sp.res.residuals.filter(pt => isHeat(pt, thr)).length, 'hvac-heat'],
-      ['Cool events detected', sp.res.residuals.filter(pt => isCool(pt, thr)).length, 'hvac-cool'],
+      ['Heat events detected', sp.res.residuals.filter(pt => ev.isHeat(pt, thr)).length, 'hvac-heat'],
+      ['Cool events detected', sp.res.residuals.filter(pt => ev.isCool(pt, thr)).length, 'hvac-cool'],
     ]);
   }
 
-  // Interpretation card
-  card('📖 What this means', [
-    ['Model', hasSeasonConfig ? 'passive-season fit' : 'RANSAC estimate', ''],
+  thermalCard(summaryEl, '📖 What this means', [
+    ['Model', hasSeasons ? 'passive-season fit' : 'RANSAC estimate', ''],
     ['Lag', 'hours outdoor→indoor', ''],
     ['Coupling', 'indoor °F per outdoor °F', ''],
     ['+residual', 'heater signature', 'hvac-heat'],
     ['−residual', 'A/C signature', 'hvac-cool'],
   ]);
+}
 
-  // ── Narrative interpretation cards ───────────────────────────────────
-  function interpCard(title, res, bestLag, heatCt, coolCt) {
-    if (!res || !bestLag) return;
+// The same numbers again, in words, for each space.
+function renderThermalInterpCards(summaryEl, modelled, ev) {
+  for (const sp of modelled) {
+    const res = sp.res, bestLag = sp.best;
+    if (!res || !bestLag) continue;
     const lag = bestLag.lag;
     const r   = bestLag.r;
     const coupling = res.slope * 100;
     const thr = res.threshold;
+    const heatCt = res.residuals.filter(pt => ev.isHeat(pt, thr)).length;
+    const coolCt = res.residuals.filter(pt => ev.isCool(pt, thr)).length;
 
     // Qualitative descriptors
     const lagDesc = lag <= 2  ? 'very fast — well-coupled to outdoor air'
@@ -2440,7 +2435,7 @@ function renderThermal(filtered) {
 
     const el = document.createElement('div');
     el.className = 'interp-card';
-    el.innerHTML = `<div class="interp-card-title">${title}</div><ul>
+    el.innerHTML = `<div class="interp-card-title">${colorDot(sp.color)} ${sp.label} — interpretation</div><ul>
       <li><b>${lag}h thermal lag</b> — ${lagDesc}</li>
       <li><b>Correlation</b> ${rDesc}</li>
       <li><b>Thermal coupling</b> ${coupDesc}</li>
@@ -2450,22 +2445,17 @@ function renderThermal(filtered) {
     </ul>`;
     summaryEl.appendChild(el);
   }
+}
 
-  for (const sp of modelled) {
-    const thr = sp.res.threshold;
-    interpCard(`${dot(sp.color)} ${sp.label} — interpretation`, sp.res, sp.best,
-      sp.res.residuals.filter(pt => isHeat(pt, thr)).length,
-      sp.res.residuals.filter(pt => isCool(pt, thr)).length);
-  }
-
-  // ── Lag correlation chart ─────────────────────────────────────────────
-  const lagTraces = modelled.map(sp => ({
+// How tightly each space follows outdoor, as a function of lag.
+function renderThermalLagChart(modelled) {
+  const traces = modelled.map(sp => ({
     x: sp.lags.map(d => d.lag), y: sp.lags.map(d => d.r), name: sp.label,
     type: 'scatter', mode: 'lines+markers',
     line: { color: sp.color, width: 2 }, marker: { size: 5 },
   }));
 
-  const lagLayout = {
+  const layout = {
     paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
     font: { color: '#e2e6f0', size: 10 },
     margin: { t: 30, r: 10, b: 40, l: 40 },
@@ -2477,38 +2467,39 @@ function renderThermal(filtered) {
     legend: { bgcolor: '#0f111700', font: { size: 10 }, orientation: 'h', y: -0.3 },
     hovermode: 'x unified',
   };
-  Plotly.react(document.getElementById('thermal-lag-chart'), lagTraces, lagLayout,
-    { responsive: true, displaylogo: false, displayModeBar: false });
+  Plotly.react(document.getElementById('thermal-lag-chart'), traces, layout, THERMAL_PLOT_CFG);
+}
 
-  // ── HVAC residual time series ─────────────────────────────────────────
-  const resTraces = [];
-  function addResTrace(res, label, heatColor, coolColor, neutralColor) {
-    if (!res) return;
+// Residual over time: above the band is heating, below it is cooling.
+function renderThermalResidualChart(modelled, ev) {
+  const traces = [];
+  for (const sp of modelled) {
+    const res = sp.res;
+    if (!res) continue;
     const thr = res.threshold;
     const posX = [], posY = [], negX = [], negY = [], zeroX = [], zeroY = [];
     for (const pt of res.residuals) {
       const { ts, r } = pt;
-      if (isHeat(pt, thr))   { posX.push(ts); posY.push(r); }
-      else if (isCool(pt, thr)) { negX.push(ts); negY.push(r); }
-      else { zeroX.push(ts); zeroY.push(r); }
+      if (ev.isHeat(pt, thr))      { posX.push(ts); posY.push(r); }
+      else if (ev.isCool(pt, thr)) { negX.push(ts); negY.push(r); }
+      else                         { zeroX.push(ts); zeroY.push(r); }
     }
-    resTraces.push({
-      x: zeroX, y: zeroY, name: `${label} neutral`,
-      type: 'scatter', mode: 'lines', line: { color: `${neutralColor}33`, width: 1 },
+    traces.push({
+      x: zeroX, y: zeroY, name: `${sp.label} neutral`,
+      type: 'scatter', mode: 'lines', line: { color: `${sp.color}33`, width: 1 },
       showlegend: false, hoverinfo: 'skip',
     });
-    resTraces.push({
-      x: posX, y: posY, name: `${label} 🔥 heat`,
-      type: 'scatter', mode: 'markers', marker: { color: heatColor, size: 3, opacity: 0.7 },
+    traces.push({
+      x: posX, y: posY, name: `${sp.label} 🔥 heat`,
+      type: 'scatter', mode: 'markers', marker: { color: '#f97316', size: 3, opacity: 0.7 },
     });
-    resTraces.push({
-      x: negX, y: negY, name: `${label} ❄ cool`,
-      type: 'scatter', mode: 'markers', marker: { color: coolColor, size: 3, opacity: 0.7 },
+    traces.push({
+      x: negX, y: negY, name: `${sp.label} ❄ cool`,
+      type: 'scatter', mode: 'markers', marker: { color: '#38bdf8', size: 3, opacity: 0.7 },
     });
   }
-  for (const sp of modelled) addResTrace(sp.res, sp.label, '#f97316', '#38bdf8', sp.color);
 
-  const resLayout = {
+  const layout = {
     paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
     font: { color: '#e2e6f0', size: 10 },
     margin: { t: 30, r: 10, b: 40, l: 50 },
@@ -2520,13 +2511,15 @@ function renderThermal(filtered) {
     shapes: [{ type: 'line', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 1.5, y1: 1.5, line: { color: '#f9731633', width: 1, dash: 'dot' } },
              { type: 'line', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: -1.5, y1: -1.5, line: { color: '#60a5fa33', width: 1, dash: 'dot' } }],
   };
-  Plotly.react(document.getElementById('thermal-residual-chart'), resTraces, resLayout,
-    { responsive: true, displaylogo: false, displayModeBar: false });
+  Plotly.react(document.getElementById('thermal-residual-chart'), traces, layout, THERMAL_PLOT_CFG);
+}
 
-  // ── Scatter phase plot: outdoor (lagged) vs indoor ────────────────────
-  const scatterTraces = [];
-  function addScatterTrace(indoorHr, res, bestLag, label, heatColor, coolColor, neutralColor) {
-    if (!indoorHr || !res || !bestLag) return;
+// Lagged outdoor against indoor, with the passive fit drawn through it.
+function renderThermalScatterChart(modelled, outHr, outSmooth, ev) {
+  const traces = [];
+  for (const sp of modelled) {
+    const { hr: indoorHr, res, best: bestLag, label, color } = sp;
+    if (!indoorHr || !res || !bestLag) continue;
     const lag = bestLag.lag;
     const hx = [], hy = [], cx = [], cy = [], nx = [], ny = [];
     const n = Math.min(outHr.length - lag, indoorHr.length - lag);
@@ -2534,29 +2527,26 @@ function renderThermal(filtered) {
       const x = outSmooth[i], y = indoorHr[i + lag]?.v;
       const pt = res.residuals[i];
       if (x == null || y == null || !pt) continue;
-      if (isHeat(pt, res.threshold)) { hx.push(x); hy.push(y); }
-      else if (isCool(pt, res.threshold)) { cx.push(x); cy.push(y); }
-      else { nx.push(x); ny.push(y); }
+      if (ev.isHeat(pt, res.threshold))      { hx.push(x); hy.push(y); }
+      else if (ev.isCool(pt, res.threshold)) { cx.push(x); cy.push(y); }
+      else                                   { nx.push(x); ny.push(y); }
     }
     // Regression line
     const allX = [...nx, ...hx, ...cx], allY = [...ny, ...hy, ...cy];
     const { slope, intercept } = linReg(allX, allY);
     const minX = Math.min(...allX), maxX = Math.max(...allX);
-    scatterTraces.push({ x: nx, y: ny, name: `${label} neutral`, type: 'scattergl', mode: 'markers',
-      marker: { color: neutralColor, size: 2, opacity: 0.3 }, showlegend: false, hoverinfo: 'skip' });
-    scatterTraces.push({ x: hx, y: hy, name: `${label} 🔥`, type: 'scattergl', mode: 'markers',
-      marker: { color: heatColor, size: 3, opacity: 0.6 } });
-    scatterTraces.push({ x: cx, y: cy, name: `${label} ❄`, type: 'scattergl', mode: 'markers',
-      marker: { color: coolColor, size: 3, opacity: 0.6 } });
-    scatterTraces.push({ x: [minX, maxX], y: [slope * minX + intercept, slope * maxX + intercept],
+    traces.push({ x: nx, y: ny, name: `${label} neutral`, type: 'scattergl', mode: 'markers',
+      marker: { color, size: 2, opacity: 0.3 }, showlegend: false, hoverinfo: 'skip' });
+    traces.push({ x: hx, y: hy, name: `${label} 🔥`, type: 'scattergl', mode: 'markers',
+      marker: { color: '#f97316', size: 3, opacity: 0.6 } });
+    traces.push({ x: cx, y: cy, name: `${label} ❄`, type: 'scattergl', mode: 'markers',
+      marker: { color: '#38bdf8', size: 3, opacity: 0.6 } });
+    traces.push({ x: [minX, maxX], y: [slope * minX + intercept, slope * maxX + intercept],
       name: `${label} fit`, type: 'scatter', mode: 'lines',
-      line: { color: neutralColor, width: 1.5, dash: 'dash' }, showlegend: false });
-  }
-  for (const sp of modelled) {
-    addScatterTrace(sp.hr, sp.res, sp.best, sp.label, '#f97316', '#38bdf8', sp.color);
+      line: { color, width: 1.5, dash: 'dash' }, showlegend: false });
   }
 
-  const scatterLayout = {
+  const layout = {
     paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
     font: { color: '#e2e6f0', size: 10 },
     margin: { t: 30, r: 10, b: 40, l: 50 },
@@ -2566,36 +2556,37 @@ function renderThermal(filtered) {
     legend: { bgcolor: '#0f111700', font: { size: 10 }, orientation: 'h', y: -0.3 },
     hovermode: 'closest',
   };
-  Plotly.react(document.getElementById('thermal-scatter-chart'), scatterTraces, scatterLayout,
-    { responsive: true, displaylogo: false, displayModeBar: false });
+  Plotly.react(document.getElementById('thermal-scatter-chart'), traces, layout, THERMAL_PLOT_CFG);
+}
 
-  // ── Monthly HVAC activity chart ───────────────────────────────────────
+// Event hours per month. With several spaces, colouring by heat/cool would
+// repeat across series, so each space keeps its own colour and the bar's
+// direction carries the distinction: heating counts up, cooling counts down.
+function renderThermalMonthlyChart(modelled, ev) {
   function monthlyHvac(res) {
     if (!res) return [];
     const heat = {}, cool = {};
     for (const pt of res.residuals) {
       const { ts } = pt;
       const key = `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, '0')}`;
-      if (isHeat(pt, res.threshold)) { heat[key] = (heat[key] || 0) + 1; }
-      if (isCool(pt, res.threshold)) { cool[key] = (cool[key] || 0) + 1; }
+      if (ev.isHeat(pt, res.threshold)) { heat[key] = (heat[key] || 0) + 1; }
+      if (ev.isCool(pt, res.threshold)) { cool[key] = (cool[key] || 0) + 1; }
     }
     const months = [...new Set([...Object.keys(heat), ...Object.keys(cool)])].sort();
     return { months, heatCounts: months.map(m => heat[m] || 0), coolCounts: months.map(m => -(cool[m] || 0)) };
   }
-  // With several spaces, colouring by heat/cool would repeat across series, so
-  // each space keeps its own colour here and the bar's direction carries the
-  // heat/cool distinction: heating counts up, cooling counts down.
-  const monthlyTraces = [];
+
+  const traces = [];
   for (const sp of modelled) {
     const m = monthlyHvac(sp.res);
     if (!m.months) continue;
-    monthlyTraces.push({ x: m.months, y: m.heatCounts, name: `${sp.label} 🔥 heat`,
+    traces.push({ x: m.months, y: m.heatCounts, name: `${sp.label} 🔥 heat`,
       type: 'bar', marker: { color: `${sp.color}cc` } });
-    monthlyTraces.push({ x: m.months, y: m.coolCounts, name: `${sp.label} ❄ cool`,
+    traces.push({ x: m.months, y: m.coolCounts, name: `${sp.label} ❄ cool`,
       type: 'bar', marker: { color: `${sp.color}55` } });
   }
 
-  const monthlyLayout = {
+  const layout = {
     paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
     font: { color: '#e2e6f0', size: 10 },
     margin: { t: 30, r: 10, b: 50, l: 50 },
@@ -2609,8 +2600,44 @@ function renderThermal(filtered) {
     shapes: [{ type: 'line', xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 0, y1: 0,
       line: { color: '#ffffff33', width: 1 } }],
   };
-  Plotly.react(document.getElementById('thermal-monthly-chart'), monthlyTraces, monthlyLayout,
-    { responsive: true, displaylogo: false, displayModeBar: false });
+  Plotly.react(document.getElementById('thermal-monthly-chart'), traces, layout, THERMAL_PLOT_CFG);
+}
+
+function renderThermal(filtered) {
+  const summaryEl = document.getElementById('thermal-summary');
+  const roles     = thermalSensors();
+  const COL_OUT   = roles.outdoor;
+
+  if (!COL_OUT)             return explainThermal(summaryEl, 'No <b>outdoor temperature sensor</b> is selected.');
+  if (!roles.indoor.length) return explainThermal(summaryEl, 'No <b>indoor temperature sensors</b> are selected.');
+
+  // Aggregate to hourly for efficiency (~8k points max vs ~100k), and smooth
+  // outdoor with a 4h rolling average to drop rapid fluctuations.
+  const outHr     = hourlyAgg(filtered, COL_OUT);
+  const outSmooth = rollingAvg(outHr, 4);
+
+  const seasonCfg   = loadSeasonConfig();
+  const hasSeasons  = seasonCfg.heat.some(([f,t])=>f&&t) || seasonCfg.cool.some(([f,t])=>f&&t);
+
+  const spaces = buildThermalSpaces(filtered, outHr, roles.indoor);
+  for (const sp of spaces) {
+    sp.res = computeThermalResidual(outHr, outSmooth, sp.hr, sp.best, seasonCfg, hasSeasons);
+  }
+  const modelled = spaces.filter(sp => sp.best && sp.res);
+
+  summaryEl.innerHTML = '';
+  if (!modelled.length) {
+    return explainThermal(summaryEl, 'The selected sensors have no overlapping readings in this date range.');
+  }
+
+  const ev = hvacEventTests(hasSeasons);
+
+  renderThermalSummaryCards(summaryEl, modelled, stripUnit(COL_OUT), hasSeasons, ev);
+  renderThermalInterpCards(summaryEl, modelled, ev);
+  renderThermalLagChart(modelled);
+  renderThermalResidualChart(modelled, ev);
+  renderThermalScatterChart(modelled, outHr, outSmooth, ev);
+  renderThermalMonthlyChart(modelled, ev);
 }
 
 // ── Utils ────────────────────────────────────────────────────────────────
