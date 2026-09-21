@@ -53,7 +53,7 @@
   .toolbar label { font-size: 12px; color: var(--muted); white-space: nowrap; }
   .divider { width: 1px; height: 22px; background: var(--border); flex-shrink: 0; }
 
-  input[type="date"], input[type="number"], input[type="text"] {
+  input[type="date"], input[type="datetime-local"], input[type="number"], input[type="text"] {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -61,7 +61,7 @@
     padding: 5px 9px;
     font-size: 12px;
   }
-  input[type="date"] { cursor: pointer; }
+  input[type="date"], input[type="datetime-local"] { cursor: pointer; }
   input[type="number"] { width: 80px; }
   input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 
@@ -628,9 +628,9 @@
 
   <div class="divider"></div>
   <label>From</label>
-  <input type="date" id="date-from">
+  <input type="datetime-local" id="date-from">
   <label>To</label>
-  <input type="date" id="date-to">
+  <input type="datetime-local" id="date-to">
   <button class="btn" id="apply-btn">Apply</button>
   <button class="btn secondary" id="all-btn">All</button>
   <button class="btn secondary" data-days="1">1d</button>
@@ -1163,8 +1163,8 @@ fileInput.addEventListener('change', async e => {
   if (allRows.length) {
     const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
     dateFrom = first; dateTo = last;
-    dateFromEl.value = toDateInput(first);
-    dateToEl.value   = toDateInput(last);
+    dateFromEl.value = toDateTimeInput(first);
+    dateToEl.value   = toDateTimeInput(last);
     dataRangeLabel.textContent = `${fmtDate(first)} – ${fmtDate(last)}`;
   }
   buildSidebar();
@@ -1195,8 +1195,8 @@ document.getElementById('sample-data-btn').addEventListener('click', async () =>
     if (allRows.length) {
       const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
       dateFrom = first; dateTo = last;
-      dateFromEl.value = toDateInput(first);
-      dateToEl.value   = toDateInput(last);
+      dateFromEl.value = toDateTimeInput(first);
+      dateToEl.value   = toDateTimeInput(last);
       dataRangeLabel.textContent = `${fmtDate(first)} – ${fmtDate(last)}`;
     }
     buildSidebar();
@@ -1456,16 +1456,16 @@ loadSeriesColors();
 
 // ── Date controls ────────────────────────────────────────────────────────
 applyBtn.addEventListener('click', () => {
-  if (dateFromEl.value) dateFrom = new Date(dateFromEl.value + 'T00:00:00');
-  if (dateToEl.value)   dateTo   = new Date(dateToEl.value + 'T23:59:59');
+  if (dateFromEl.value) dateFrom = new Date(dateFromEl.value);
+  if (dateToEl.value)   dateTo   = new Date(dateToEl.value);
   renderChart();
   if (analysisPanel.classList.contains('visible')) renderActiveView();
 });
 allBtn.addEventListener('click', () => {
   if (!allRows.length) return;
   dateFrom = allRows[0].ts; dateTo = allRows[allRows.length - 1].ts;
-  dateFromEl.value = toDateInput(dateFrom);
-  dateToEl.value   = toDateInput(dateTo);
+  dateFromEl.value = toDateTimeInput(dateFrom);
+  dateToEl.value   = toDateTimeInput(dateTo);
   renderChart();
   if (analysisPanel.classList.contains('visible')) renderActiveView();
 });
@@ -1477,8 +1477,8 @@ document.querySelectorAll('[data-days]').forEach(btn => {
     const days = parseInt(btn.dataset.days);
     dateTo   = allRows[allRows.length - 1].ts;
     dateFrom = new Date(dateTo.getTime() - days * 86400 * 1000);
-    dateFromEl.value = toDateInput(dateFrom);
-    dateToEl.value   = toDateInput(dateTo);
+    dateFromEl.value = toDateTimeInput(dateFrom);
+    dateToEl.value   = toDateTimeInput(dateTo);
     renderChart();
     if (analysisPanel.classList.contains('visible')) renderActiveView();
   });
@@ -1604,8 +1604,8 @@ async function fetchForecasts() {
     const endFc  = new Date(now.getTime() + 10 * 86400 * 1000);
     dateFrom     = start;
     dateTo       = endFc;
-    dateFromEl.value = toDateInput(start);
-    dateToEl.value   = toDateInput(endFc);
+    dateFromEl.value = toDateTimeInput(start);
+    dateToEl.value   = toDateTimeInput(endFc);
   }
 
   renderChart();
@@ -1936,9 +1936,15 @@ function saveSeasonConfig(cfg) {
   localStorage.setItem(SEASON_KEY, JSON.stringify(cfg));
 }
 
-// Returns 'heat' | 'cool' | 'passive' for a given Date
+// Returns 'heat' | 'cool' | 'passive' for a given Date.
+// Season ranges are whole days with no time of day, by design: they say which
+// mode the HVAC was in, not when it ran — working out the runtime inside those
+// days is the model's job. Turning an instant into a day still needs a time
+// zone though, and it has to be the viewer's, the one the range was typed in.
+// Reading it off the UTC clock kept a full 24 hours but the wrong 24: a day
+// marked here ran 6pm the evening before to 6pm that day.
 function classifyDate(ts, cfg) {
-  const d = ts.toISOString().slice(0, 10); // YYYY-MM-DD
+  const d = toLocalDate(ts);
   for (const [from, to] of cfg.heat) {
     if (from && to && d >= from && d <= to) return 'heat';
   }
@@ -2329,8 +2335,8 @@ async function loadFromDirHandle(dirHandle) {
   if (allRows.length) {
     const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
     dateFrom = first; dateTo = last;
-    dateFromEl.value = toDateInput(first);
-    dateToEl.value   = toDateInput(last);
+    dateFromEl.value = toDateTimeInput(first);
+    dateToEl.value   = toDateTimeInput(last);
     dataRangeLabel.textContent = `${fmtDate(first)} – ${fmtDate(last)}`;
   }
   buildSidebar();
@@ -2811,13 +2817,20 @@ function showLoading(v, msg = 'Processing…') {
   loadingMsg.textContent  = msg;
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-// The <input type="date"> boxes are read back as LOCAL time by Apply, so they
-// have to be written in local time too. toISOString() formats in UTC, which
-// put a reading taken after 6pm Mountain on the following day and made Apply
-// act on a range the chart was never showing.
-function toDateInput(d) {
+// The calendar date an instant falls on FOR THE VIEWER, "YYYY-MM-DD". This is
+// deliberately not toISOString(), which renders the UTC calendar: west of
+// Greenwich an evening reading is already tomorrow there, so a UTC date and a
+// date someone typed into a picker are not the same kind of thing.
+function toLocalDate(d) {
   const p = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// Value for the range boxes: "YYYY-MM-DDTHH:MM" in local time, which is how
+// <input type="datetime-local"> stores it and how Apply reads it back.
+function toDateTimeInput(d) {
+  const p = n => String(n).padStart(2, '0');
+  return `${toLocalDate(d)}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 function fmtDate(d) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
