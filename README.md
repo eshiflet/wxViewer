@@ -95,14 +95,32 @@ The Thermal Analysis panel *infers* when heating and cooling ran, from deviation
 the passive thermal model. That works without any extra hardware, and labelling your
 heating and cooling seasons sharpens it considerably.
 
-For definitive events rather than inferred ones, add a temperature probe in the HVAC
-supply trunk and let it come through as an ordinary channel in the CSV. Duct air sits near
-room temperature when nothing is running, climbs while the furnace burns and drops sharply
-under cooling, so the trace reads out actual cycles instead of estimating them.
+For definitive events rather than inferred ones, put a temperature probe in the HVAC supply
+trunk and let it come through as an ordinary channel in the CSV, then name it under
+**HVAC Temperature Sensor** in the Configuration section.
 
-Such a channel is a temperature series like any other: it charts, it gets records, and it
-can be picked in the Configuration section. Note that its numbers describe duct air rather
-than a room, so its lag and coupling figures aren't comparable to a living space.
+Duct air sits at whatever surrounds the duct while the blower is off, is pulled down to the
+cooling coil when the compressor runs, and is pushed well above room temperature by a
+furnace. A cooling coil's return-to-supply split is normally 16–24°F and a gas furnace's
+rise 40–70°F, and even damped by a probe sitting downstream in the trunk that is far outside
+the couple of degrees the reading wanders while idle — so the trace says when the equipment
+*ran* rather than when it probably ran.
+
+wxViewer reads the idle level from the probe's own history rather than from a room sensor,
+because what the duct equilibrates to might be a basement, a crawlspace or an attic.
+Excursions either side of that level become cooling and heating periods, with brief lulls
+inside a cycling period treated as one period: a compressor holding a setpoint switches on
+and off every few minutes, and the house is in cooling throughout.
+
+When a probe is assigned, those measured periods replace the heating and cooling ranges
+above as the model's notion of which hours were passive — the regression then trains on
+hours the equipment demonstrably wasn't running. Without one, the season ranges are used,
+and without those, RANSAC guesses. The **HVAC interpretation** card reports run hours, cycle
+counts, duty cycle and how far supply air departed from idle.
+
+The probe is a temperature series like any other on the main chart, but it is not modelled
+as a room: it gets no lag or coupling figures, because its temperature is set by the
+equipment rather than by heat moving through the building envelope.
 
 ---
 

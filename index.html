@@ -525,6 +525,7 @@
   /* ── Thermal sensor roles ─────────────────────────────────────────── */
   .season-group-title.indoor  { color: #f59e0b; }
   .season-group-title.outdoor { color: #38bdf8; }
+  .season-group-title.hvac    { color: #a78bfa; }
   .sensor-list {
     max-height: 168px; overflow-y: auto;
     border: 1px solid var(--border); border-radius: 4px;
@@ -723,6 +724,15 @@
                 <div class="sensor-hint">
                   The reference every indoor sensor is compared against. A sensor
                   used here can't also be an indoor sensor.
+                </div>
+              </div>
+              <div class="season-group">
+                <div class="season-group-title hvac">🌀 HVAC Temperature Sensor</div>
+                <select class="sensor-select" id="hvac-sensor-select"></select>
+                <div class="sensor-hint" id="hvac-sensor-hint">
+                  A probe in the supply duct. When present it measures when heating
+                  and cooling actually ran, and the model uses that instead of the
+                  season ranges above.
                 </div>
               </div>
               </div>
@@ -1667,10 +1677,15 @@ function saveThermalSensors(cfg) {
 // Best guess when nothing has been configured: the outdoor reference is the
 // temperature channel that calls itself outdoor, and every other temperature
 // channel is treated as a space inside the building.
+// Names a duct probe tends to go by. Matching one is only a first guess; the
+// dropdown is what actually decides.
+const HVAC_SENSOR_RE = /hvac|supply|duct|plenum|trunk|register|vent/i;
+
 function guessThermalSensors(cols) {
   const temps   = cols.filter(c => DEFAULT_SELECTED_RE.test(c));
   const outdoor = temps.find(c => /outdoor|outside|exterior/i.test(c)) || temps[0] || '';
-  return { outdoor, indoor: temps.filter(c => c !== outdoor) };
+  const hvac    = temps.find(c => c !== outdoor && HVAC_SENSOR_RE.test(c)) || '';
+  return { outdoor, hvac, indoor: temps.filter(c => c !== outdoor && c !== hvac) };
 }
 
 // The roles actually in force, with anything no longer in the data dropped so
@@ -1679,46 +1694,54 @@ function thermalSensors() {
   const saved = loadThermalSensors();
   const cfg   = saved || guessThermalSensors(columns);
   const outdoor = columns.includes(cfg.outdoor) ? cfg.outdoor : '';
+  const hvac    = columns.includes(cfg.hvac) && cfg.hvac !== outdoor ? cfg.hvac : '';
   return {
-    outdoor,
-    indoor: (cfg.indoor || []).filter(c => columns.includes(c) && c !== outdoor),
+    outdoor, hvac,
+    indoor: (cfg.indoor || []).filter(c => columns.includes(c) && c !== outdoor && c !== hvac),
     configured: !!saved,
   };
 }
 
 function setThermalSensors(next) {
-  saveThermalSensors({ outdoor: next.outdoor, indoor: next.indoor });
+  saveThermalSensors({ outdoor: next.outdoor, hvac: next.hvac || '', indoor: next.indoor });
   renderSensorConfig();
   updateSeasonSummary(loadSeasonConfig());
   if (analysisPanel.classList.contains('visible')) renderActiveView();
 }
 
 function renderSensorConfig() {
-  const list = document.getElementById('indoor-sensor-list');
-  const sel  = document.getElementById('outdoor-sensor-select');
-  const cur  = thermalSensors();
+  const list   = document.getElementById('indoor-sensor-list');
+  const outSel = document.getElementById('outdoor-sensor-select');
+  const hvSel  = document.getElementById('hvac-sensor-select');
+  const cur    = thermalSensors();
 
   list.innerHTML = '';
   if (!columns.length) {
     list.innerHTML = '<div class="sensor-hint" style="padding:4px 5px">Load CSV files to choose sensors.</div>';
-    sel.innerHTML = '';
+    outSel.innerHTML = ''; hvSel.innerHTML = '';
     return;
   }
 
+  // A sensor fills exactly one role. A column already spoken for elsewhere is
+  // shown greyed in the indoor list with the role that claimed it, and is left
+  // out of the other dropdown — so no combination of clicks can double-assign.
   columns.forEach((col, i) => {
-    const isOutdoor = col === cur.outdoor;
+    const takenBy = col === cur.outdoor ? 'outdoor'
+                  : col === cur.hvac    ? 'HVAC'
+                  : null;
     const item = document.createElement('label');
-    item.className = 'sensor-item' + (isOutdoor ? ' taken' : '');
+    item.className = 'sensor-item' + (takenBy ? ' taken' : '');
 
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked  = cur.indoor.includes(col);
-    cb.disabled = isOutdoor;                 // a sensor fills one role or the other
+    cb.disabled = !!takenBy;
     cb.addEventListener('change', () => {
       const next = thermalSensors();
       const set  = new Set(next.indoor);
       if (cb.checked) set.add(col); else set.delete(col);
-      setThermalSensors({ outdoor: next.outdoor, indoor: columns.filter(c => set.has(c)) });
+      setThermalSensors({ outdoor: next.outdoor, hvac: next.hvac,
+                          indoor: columns.filter(c => set.has(c)) });
     });
 
     const swatch = document.createElement('div');
@@ -1729,29 +1752,45 @@ function renderSensorConfig() {
     name.textContent = col;
 
     item.append(cb, swatch, name);
-    if (isOutdoor) {
+    if (takenBy) {
       const note = document.createElement('span');
-      note.className = 'role-note'; note.textContent = 'outdoor';
+      note.className = 'role-note'; note.textContent = takenBy;
       item.appendChild(note);
     }
     list.appendChild(item);
   });
 
-  // The outdoor dropdown offers everything not already claimed as indoor.
-  sel.innerHTML = '';
-  const none = document.createElement('option');
-  none.value = ''; none.textContent = '— none selected —';
-  sel.appendChild(none);
-  for (const col of columns) {
-    if (cur.indoor.includes(col)) continue;
-    const opt = document.createElement('option');
-    opt.value = col; opt.textContent = col;
-    sel.appendChild(opt);
+  // Both dropdowns offer every column, including ones currently ticked as
+  // indoor: picking one here is how you move it to this role, and it drops out
+  // of the indoor list on the way. Only the other dropdown's pick is withheld,
+  // so outdoor and HVAC can never name the same sensor.
+  function fillSelect(sel, chosen, exclude) {
+    sel.innerHTML = '';
+    const none = document.createElement('option');
+    none.value = ''; none.textContent = '— none selected —';
+    sel.appendChild(none);
+    for (const col of columns) {
+      if (col === exclude) continue;
+      const opt = document.createElement('option');
+      opt.value = col; opt.textContent = col;
+      sel.appendChild(opt);
+    }
+    sel.value = chosen;
   }
-  sel.value = cur.outdoor;
-  sel.onchange = () => {
+  fillSelect(outSel, cur.outdoor, cur.hvac);
+  fillSelect(hvSel,  cur.hvac,    cur.outdoor);
+
+  outSel.onchange = () => {
     const next = thermalSensors();
-    setThermalSensors({ outdoor: sel.value, indoor: next.indoor.filter(c => c !== sel.value) });
+    setThermalSensors({ outdoor: outSel.value,
+                        hvac: next.hvac === outSel.value ? '' : next.hvac,
+                        indoor: next.indoor.filter(c => c !== outSel.value) });
+  };
+  hvSel.onchange = () => {
+    const next = thermalSensors();
+    setThermalSensors({ outdoor: next.outdoor === hvSel.value ? '' : next.outdoor,
+                        hvac: hvSel.value,
+                        indoor: next.indoor.filter(c => c !== hvSel.value) });
   };
 }
 
@@ -1861,6 +1900,7 @@ function updateSeasonSummary(cfg) {
   if (heatCount || coolCount) bits.push(`${heatCount} heat, ${coolCount} cool`);
   if (s.indoor.length && s.outdoor) {
     bits.push(`${s.indoor.length} indoor vs ${s.outdoor}${s.configured ? '' : ' (auto)'}`);
+    if (s.hvac) bits.push(`HVAC probe: ${stripUnit(s.hvac)}`);
   } else if (columns.length) {
     bits.push('sensors not assigned');
   }
@@ -2293,6 +2333,123 @@ function crossCorrAtLags(outdoor, indoor, maxLag) {
   return results;
 }
 
+// ── Measured HVAC state from a supply-duct probe ────────────────────────
+// A probe in the supply trunk reads the air the equipment is actually pushing,
+// so it says when heating and cooling RAN rather than inferring it. Idle, the
+// probe sits at whatever the air around the duct is; running, it is pulled to
+// the coil or heat-exchanger temperature. Published figures put a cooling
+// coil's return-to-supply split at roughly 16–24°F and a gas furnace's rise at
+// 40–70°F, and a probe downstream in the trunk sees a damped version of that —
+// which is still far outside the ±2°F the reading wanders while idle.
+//
+// The idle reference is taken from the probe's own history rather than from a
+// room sensor, because the duct's surroundings are what it equilibrates to and
+// that could be a basement, a crawlspace or an attic. A high percentile over a
+// window either side of each reading is that idle level: cooling pulls the
+// probe below it, heating pushes it above, and the percentile ignores the
+// excursions themselves as long as the system is not running most of the time.
+const HVAC_BASELINE_HOURS = 6;    // half-width of the idle-reference window
+const HVAC_BASELINE_Q     = 0.85; // percentile within it taken as "idle"
+const HVAC_ON_THRESHOLD   = 5;    // °F from idle before calling the system on
+const HVAC_GAP_MINUTES    = 30;   // shorter lulls are one cycling period
+
+// Rows carrying a probe reading, oldest first.
+function hvacSamples(filtered, col) {
+  const out = [];
+  for (const r of filtered) {
+    const v = r[col];
+    if (typeof v === 'number' && !isNaN(v)) out.push({ ts: +r.ts, v });
+  }
+  return out;
+}
+
+// Idle level at each sample: a high percentile of a window centred on it.
+// Walks a sorted window rather than re-sorting per sample so a season of
+// 5-minute readings stays cheap.
+function hvacBaseline(samples) {
+  const half = HVAC_BASELINE_HOURS * 3600 * 1000;
+  const out = new Array(samples.length);
+  let lo = 0, hi = 0;
+  for (let i = 0; i < samples.length; i++) {
+    while (lo < samples.length && samples[lo].ts < samples[i].ts - half) lo++;
+    while (hi < samples.length && samples[hi].ts <= samples[i].ts + half) hi++;
+    const win = samples.slice(lo, hi).map(s => s.v).sort((a, b) => a - b);
+    out[i] = win[Math.min(win.length - 1, Math.floor(win.length * HVAC_BASELINE_Q))];
+  }
+  return out;
+}
+
+// 'heat' | 'cool' | 'passive' per sample, with brief lulls inside a cycling
+// period filled in: a compressor holding a setpoint switches on and off every
+// few minutes, and the house is in cooling throughout, not alternating.
+function detectHvacModes(filtered, col) {
+  const samples = hvacSamples(filtered, col);
+  if (samples.length < 12) return null;          // too little to calibrate
+
+  const base = hvacBaseline(samples);
+  const modes = samples.map((s, i) =>
+      base[i] - s.v > HVAC_ON_THRESHOLD ? 'cool'
+    : s.v - base[i] > HVAC_ON_THRESHOLD ? 'heat'
+    : 'passive');
+
+  for (const mode of ['cool', 'heat']) {
+    let last = -1;
+    for (let i = 0; i < modes.length; i++) {
+      if (modes[i] !== mode) continue;
+      if (last >= 0 && samples[i].ts - samples[last].ts <= HVAC_GAP_MINUTES * 60000) {
+        for (let k = last + 1; k < i; k++) modes[k] = mode;
+      }
+      last = i;
+    }
+  }
+  return { samples, base, modes };
+}
+
+// Collapse to one label per clock hour so the thermal model, which works on
+// hourly means, can ask what the equipment was doing during that hour. The
+// hour takes whichever state held for most of it.
+function hvacHourlyModes(detected) {
+  if (!detected) return null;
+  const byHour = new Map();
+  detected.samples.forEach((s, i) => {
+    const h = Math.floor(s.ts / 3600000) * 3600000;
+    if (!byHour.has(h)) byHour.set(h, { heat: 0, cool: 0, passive: 0 });
+    byHour.get(h)[detected.modes[i]]++;
+  });
+  const out = new Map();
+  for (const [h, c] of byHour) {
+    out.set(h, c.cool > c.heat && c.cool > c.passive ? 'cool'
+              : c.heat > c.cool && c.heat > c.passive ? 'heat'
+              : 'passive');
+  }
+  return out;
+}
+
+// Runs of a single state, for counting cycles and their length.
+function hvacRuns(detected) {
+  const runs = [];
+  if (!detected) return runs;
+  const { samples, modes, base } = detected;
+  let start = 0;
+  for (let i = 1; i <= modes.length; i++) {
+    if (i === modes.length || modes[i] !== modes[start]) {
+      const slice = samples.slice(start, i);
+      runs.push({
+        mode: modes[start],
+        from: new Date(slice[0].ts),
+        to:   new Date(slice[slice.length - 1].ts),
+        minutes: (slice[slice.length - 1].ts - slice[0].ts) / 60000,
+        peak: modes[start] === 'cool' ? Math.min(...slice.map(s => s.v))
+            : modes[start] === 'heat' ? Math.max(...slice.map(s => s.v))
+            : null,
+        maxDelta: Math.max(...slice.map((s, k) => Math.abs(base[start + k] - s.v))),
+      });
+      start = i;
+    }
+  }
+  return runs;
+}
+
 const THERMAL_MAX_LAG   = 24;   // hours to search for the outdoor→indoor lag
 const THERMAL_CHART_IDS = ['thermal-lag-chart', 'thermal-residual-chart',
                            'thermal-scatter-chart', 'thermal-monthly-chart'];
@@ -2329,10 +2486,12 @@ function buildThermalSpaces(filtered, outHr, indoorCols) {
 }
 
 // How far a space sits from what outdoor temperature alone predicts. The
-// regression is fitted on passive hours only — labelled ones when seasons are
-// configured, otherwise ones RANSAC has not yet rejected — so HVAC activity
-// shows up as a residual instead of being absorbed into the baseline.
-function computeThermalResidual(outHr, outSmooth, indoorHr, bestLag, seasonCfg, hasSeasons) {
+// regression is fitted on passive hours only, so HVAC activity shows up as a
+// residual instead of being absorbed into the baseline. Which hours count as
+// passive comes from the best evidence available, in order: a supply-duct
+// probe that measured what the equipment did, then the season ranges someone
+// typed in, and failing both, RANSAC's guess at which hours look undisturbed.
+function computeThermalResidual(outHr, outSmooth, indoorHr, bestLag, seasonCfg, hasSeasons, hvacHours) {
   if (!indoorHr || !bestLag) return null;
   const lag = bestLag.lag;
   const n   = Math.min(outHr.length - lag, indoorHr.length - lag);
@@ -2340,15 +2499,17 @@ function computeThermalResidual(outHr, outSmooth, indoorHr, bestLag, seasonCfg, 
   for (let i = 0; i < n; i++) {
     const x = outSmooth[i], y = indoorHr[i + lag]?.v;
     if (x != null && y != null) {
-      xs.push(x); ys.push(y); ts.push(indoorHr[i + lag].ts);
-      seasons.push(hasSeasons ? classifyDate(indoorHr[i + lag].ts, seasonCfg) : null);
+      const at = indoorHr[i + lag].ts;
+      xs.push(x); ys.push(y); ts.push(at);
+      const measured = hvacHours ? hvacHours.get(Math.floor(+at / 3600000) * 3600000) : null;
+      seasons.push(measured ?? (hasSeasons ? classifyDate(at, seasonCfg) : null));
     }
   }
 
   let slope, intercept, mask;
 
-  if (hasSeasons) {
-    // Train regression ONLY on passive periods — user-labeled ground truth
+  if (hasSeasons || hvacHours) {
+    // Train regression ONLY on passive periods — measured or user-labelled
     const pxs = xs.filter((_, i) => seasons[i] === 'passive');
     const pys = ys.filter((_, i) => seasons[i] === 'passive');
     if (pxs.length >= 10) {
@@ -2392,12 +2553,13 @@ function computeThermalResidual(outHr, outSmooth, indoorHr, bestLag, seasonCfg, 
   return { residuals, slope, intercept, threshold };
 }
 
-// When season config is active: heat residuals only count in heating periods,
-// cool residuals only in cooling periods, and passive periods flag neither.
-function hvacEventTests(hasSeasons) {
+// With labels available — measured or typed — a positive residual only counts
+// as heating if the house was in heating at the time, and likewise for cooling.
+// Without labels every large residual counts, which is the RANSAC fallback.
+function hvacEventTests(labelled) {
   return {
-    isHeat: (pt, threshold) => pt.r >  threshold && (!hasSeasons || pt.season === 'heat'),
-    isCool: (pt, threshold) => pt.r < -threshold && (!hasSeasons || pt.season === 'cool'),
+    isHeat: (pt, threshold) => pt.r >  threshold && (!labelled || pt.season === 'heat'),
+    isCool: (pt, threshold) => pt.r < -threshold && (!labelled || pt.season === 'cool'),
   };
 }
 
@@ -2412,7 +2574,7 @@ function thermalCard(summaryEl, title, stats) {
 }
 
 // One figures card per space, then a legend for what the numbers mean.
-function renderThermalSummaryCards(summaryEl, modelled, outLabel, hasSeasons, ev) {
+function renderThermalSummaryCards(summaryEl, modelled, outLabel, hasSeasons, ev, measured) {
   for (const sp of modelled) {
     const thr = sp.res.threshold;
     thermalCard(summaryEl, `${colorDot(sp.color)} ${sp.label} vs ${outLabel}`, [
@@ -2426,7 +2588,7 @@ function renderThermalSummaryCards(summaryEl, modelled, outLabel, hasSeasons, ev
   }
 
   thermalCard(summaryEl, '📖 What this means', [
-    ['Model', hasSeasons ? 'passive-season fit' : 'RANSAC estimate', ''],
+    ['Model', measured ? 'measured HVAC state' : hasSeasons ? 'passive-season fit' : 'RANSAC estimate', ''],
     ['Lag', 'hours outdoor→indoor', ''],
     ['Coupling', 'indoor °F per outdoor °F', ''],
     ['+residual', 'heater signature', 'hvac-heat'],
@@ -2473,6 +2635,42 @@ function renderThermalInterpCards(summaryEl, modelled, ev) {
     </ul>`;
     summaryEl.appendChild(el);
   }
+}
+
+// What the duct probe saw: when the equipment ran, how hard, and how often.
+function renderHvacInterpCard(summaryEl, detected, col, color) {
+  const runs  = hvacRuns(detected);
+  const mins  = m => runs.filter(r => r.mode === m).reduce((a, r) => a + r.minutes, 0);
+  const cycles = m => runs.filter(r => r.mode === m && r.minutes > 0).length;
+  const coolH = mins('cool') / 60, heatH = mins('heat') / 60;
+  const spanH = (detected.samples[detected.samples.length - 1].ts - detected.samples[0].ts) / 3600000;
+  const idleH = Math.max(0, spanH - coolH - heatH);
+
+  const idle = detected.base.slice().sort((a, b) => a - b);
+  const idleMed = idle[Math.floor(idle.length / 2)];
+  const deepest = runs.filter(r => r.mode === 'cool').reduce((b, r) => r.peak < b ? r.peak : b, Infinity);
+  const hottest = runs.filter(r => r.mode === 'heat').reduce((b, r) => r.peak > b ? r.peak : b, -Infinity);
+  const longest = m => runs.filter(r => r.mode === m).reduce((b, r) => r.minutes > b ? r.minutes : b, 0);
+  const duty = spanH > 0 ? (100 * (coolH + heatH) / spanH) : 0;
+
+  const li = [];
+  li.push(`<li><b>${coolH.toFixed(1)} cooling hours</b> in ${cycles('cool')} period${cycles('cool') === 1 ? '' : 's'}` +
+          (coolH ? `, longest ${Math.round(longest('cool'))} min` : '') + `</li>`);
+  li.push(`<li><b>${heatH.toFixed(1)} heating hours</b> in ${cycles('heat')} period${cycles('heat') === 1 ? '' : 's'}` +
+          (heatH ? `, longest ${Math.round(longest('heat'))} min` : '') + `</li>`);
+  li.push(`<li><b>${idleH.toFixed(1)} idle hours</b> — <span class="good">${duty.toFixed(0)}% duty cycle</span> over ${spanH.toFixed(0)}h of probe data</li>`);
+  li.push(`<li><b>Idle duct temperature</b> ${idleMed.toFixed(1)}°F — what the probe reads with the blower off</li>`);
+  if (isFinite(deepest)) li.push(`<li><span class="lo">❄ Coldest supply air ${deepest.toFixed(1)}°F</span>, ` +
+    `${(idleMed - deepest).toFixed(1)}°F below idle — consistent with a cooling coil</li>`);
+  if (isFinite(hottest)) li.push(`<li><span class="hi">🔥 Hottest supply air ${hottest.toFixed(1)}°F</span>, ` +
+    `${(hottest - idleMed).toFixed(1)}°F above idle — consistent with a furnace</li>`);
+  if (!isFinite(hottest)) li.push(`<li>No heating seen yet in this range — expect the mirror image, a sharp rise then a saw-tooth against the setpoint</li>`);
+  li.push(`<li>These are <b>measured</b>, not inferred; the thermal model uses them in place of the season ranges</li>`);
+
+  const el = document.createElement('div');
+  el.className = 'interp-card';
+  el.innerHTML = `<div class="interp-card-title">${colorDot(color)} ${stripUnit(col)} — HVAC interpretation</div><ul>${li.join('')}</ul>`;
+  summaryEl.appendChild(el);
 }
 
 // How tightly each space follows outdoor, as a function of lag.
@@ -2630,9 +2828,14 @@ function renderThermal(filtered) {
   const seasonCfg   = loadSeasonConfig();
   const hasSeasons  = seasonCfg.heat.some(([f,t])=>f&&t) || seasonCfg.cool.some(([f,t])=>f&&t);
 
+  // A duct probe, when one is assigned and has enough readings, measures what
+  // the equipment did and takes precedence over the typed season ranges.
+  const detected  = roles.hvac ? detectHvacModes(filtered, roles.hvac) : null;
+  const hvacHours = hvacHourlyModes(detected);
+
   const spaces = buildThermalSpaces(filtered, outHr, roles.indoor);
   for (const sp of spaces) {
-    sp.res = computeThermalResidual(outHr, outSmooth, sp.hr, sp.best, seasonCfg, hasSeasons);
+    sp.res = computeThermalResidual(outHr, outSmooth, sp.hr, sp.best, seasonCfg, hasSeasons, hvacHours);
   }
   const modelled = spaces.filter(sp => sp.best && sp.res);
 
@@ -2641,9 +2844,13 @@ function renderThermal(filtered) {
     return explainThermal(summaryEl, 'The selected sensors have no overlapping readings in this date range.');
   }
 
-  const ev = hvacEventTests(hasSeasons);
+  const ev = hvacEventTests(hasSeasons || !!hvacHours);
 
-  renderThermalSummaryCards(summaryEl, modelled, stripUnit(COL_OUT), hasSeasons, ev);
+  renderThermalSummaryCards(summaryEl, modelled, stripUnit(COL_OUT), hasSeasons, ev, !!hvacHours);
+  if (detected) {
+    renderHvacInterpCard(summaryEl, detected, roles.hvac,
+      seriesColor(roles.hvac, columns.indexOf(roles.hvac)));
+  }
   renderThermalInterpCards(summaryEl, modelled, ev);
   renderThermalLagChart(modelled);
   renderThermalResidualChart(modelled, ev);
