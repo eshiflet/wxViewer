@@ -1490,6 +1490,44 @@ function detectAnomalies(values) {
   return indices;
 }
 
+// ── Hover readout follows the cursor ────────────────────────────────────
+// With hovermode 'x unified' Plotly parks the combined readout beside the
+// data it describes — which is exactly where the traces are, so reading a
+// value means covering the thing being read. Moving the pointer clear of the
+// lines does not help, because the box stays pinned to them.
+//
+// Plotly draws that box as a <g class="legend"> inside .hoverlayer, with a
+// translate() whose y comes from the data. Rewriting that y after each draw
+// makes the box ride with the pointer. The x is left alone: Plotly already
+// flips the box to whichever side of the cursor has room.
+//
+// The listener sits on our own container, not on Plotly's drag layer, so it
+// survives the redraws that replace that layer; and it bubbles, which puts it
+// after Plotly's own handler, by which point the box exists and is measurable.
+function followCursorHover(gd) {
+  gd.addEventListener('mousemove', e => {
+    const box = gd.querySelector('.hoverlayer .legend');
+    if (!box) return;
+    const m = /translate\(\s*([-\d.]+)[\s,]+([-\d.]+)\s*\)/.exec(box.getAttribute('transform') || '');
+    if (!m) return;
+
+    const plot = gd.querySelector('.nsewdrag');
+    if (!plot) return;
+    const pr = plot.getBoundingClientRect();
+    const h  = box.getBoundingClientRect().height;
+
+    // Centre on the pointer, but keep the whole box inside the plotting area.
+    // A box taller than the plot simply starts at the top.
+    const top = h >= pr.height
+      ? pr.top
+      : Math.min(Math.max(e.clientY - h / 2, pr.top), pr.bottom - h);
+
+    box.setAttribute('transform', `translate(${m[1]},${top - gd.getBoundingClientRect().top})`);
+  });
+}
+
+followCursorHover(chartEl);
+
 // ── Chart rendering ──────────────────────────────────────────────────────
 let chartRendered = false;
 
