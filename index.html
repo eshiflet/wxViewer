@@ -1420,11 +1420,13 @@ loadSeriesColors();
 applyBtn.addEventListener('click', () => {
   if (dateFromEl.value) dateFrom = new Date(dateFromEl.value);
   if (dateToEl.value)   dateTo   = new Date(dateToEl.value);
+  chartView = null;
   renderChart();
   if (analysisPanel.classList.contains('visible')) renderActiveView();
 });
 allBtn.addEventListener('click', () => {
   if (!allRows.length) return;
+  chartView = null;
   dateFrom = allRows[0].ts; dateTo = allRows[allRows.length - 1].ts;
   dateFromEl.value = toDateTimeInput(dateFrom);
   dateToEl.value   = toDateTimeInput(dateTo);
@@ -1436,6 +1438,7 @@ allBtn.addEventListener('click', () => {
 document.querySelectorAll('[data-days]').forEach(btn => {
   btn.addEventListener('click', () => {
     if (!allRows.length) return;
+    chartView = null;
     const days = parseInt(btn.dataset.days);
     dateTo   = allRows[allRows.length - 1].ts;
     dateFrom = new Date(dateTo.getTime() - days * 86400 * 1000);
@@ -1491,42 +1494,170 @@ function detectAnomalies(values) {
 }
 
 // ── Hover readout follows the cursor ────────────────────────────────────
-// With hovermode 'x unified' Plotly parks the combined readout beside the
-// data it describes — which is exactly where the traces are, so reading a
-// value means covering the thing being read. Moving the pointer clear of the
-// lines does not help, because the box stays pinned to them.
+// With hovermode 'x unified' Plotly parks the combined readout beside the data
+// it describes — which is where the traces are, so reading a value covers the
+// thing being read, and moving the pointer clear of the lines does not help
+// because the box stays pinned to them. Plotly draws it as a <g class="legend">
+// inside .hoverlayer with a translate() whose y comes from the data; this
+// rewrites that y. The x is left alone, since Plotly already flips the box to
+// whichever side of the cursor has room.
 //
-// Plotly draws that box as a <g class="legend"> inside .hoverlayer, with a
-// translate() whose y comes from the data. Rewriting that y after each draw
-// makes the box ride with the pointer. The x is left alone: Plotly already
-// flips the box to whichever side of the cursor has room.
+// Two things make this harder than it looks, both learned by getting them
+// wrong:
 //
-// The listener sits on our own container, not on Plotly's drag layer, so it
-// survives the redraws that replace that layer; and it bubbles, which puts it
-// after Plotly's own handler, by which point the box exists and is measurable.
+// 1. Plotly throttles hover, so its redraw frequently lands after the mousemove
+//    that triggered it and puts the box back where it was. Repositioning only
+//    in the mousemove handler therefore works for one isolated event and fails
+//    under continuous movement. A MutationObserver watches the transform and
+//    corrects it whenever Plotly rewrites it, whatever the ordering. Our own
+//    write cannot loop, because the callback recomputes the same value and
+//    leaves it alone.
+//
+// 2. Nothing in the hot path may read layout. getBoundingClientRect() or
+//    getBBox() during a hover forces the browser to re-resolve a plot that can
+//    hold hundreds of thousands of points. Plot geometry is therefore cached
+//    when the pointer enters, and the box height comes from the height
+//    ATTRIBUTE on Plotly's own background rect — an attribute read, not a
+//    measurement.
 function followCursorHover(gd) {
-  gd.addEventListener('mousemove', e => {
+  let pointerY = null;   // client y while the pointer is over the plot
+  let geom     = null;   // { gdTop, top, bottom }, gd-local
+
+  // The only place layout is read, and only as the pointer arrives.
+  function readGeometry() {
+    const plot = gd.querySelector('.nsewdrag');
+    if (!plot) return null;
+    const g = gd.getBoundingClientRect();
+    const p = plot.getBoundingClientRect();
+    return { gdTop: g.top, top: p.top - g.top, bottom: p.bottom - g.top };
+  }
+
+  function place() {
+    if (pointerY == null || !geom) return;
     const box = gd.querySelector('.hoverlayer .legend');
     if (!box) return;
-    const m = /translate\(\s*([-\d.]+)[\s,]+([-\d.]+)\s*\)/.exec(box.getAttribute('transform') || '');
-    if (!m) return;
+    const transform = box.getAttribute('transform') || '';
+    const open = transform.indexOf('('), comma = transform.indexOf(',');
+    if (open < 0 || comma < 0) return;
 
-    const plot = gd.querySelector('.nsewdrag');
-    if (!plot) return;
-    const pr = plot.getBoundingClientRect();
-    const h  = box.getBoundingClientRect().height;
+    const bg = box.querySelector('rect.bg');
+    const h  = bg ? +bg.getAttribute('height') || 0 : 0;
+    const x  = transform.slice(open + 1, comma);
 
-    // Centre on the pointer, but keep the whole box inside the plotting area.
-    // A box taller than the plot simply starts at the top.
-    const top = h >= pr.height
-      ? pr.top
-      : Math.min(Math.max(e.clientY - h / 2, pr.top), pr.bottom - h);
+    const y = h >= geom.bottom - geom.top
+      ? geom.top
+      : Math.min(Math.max(pointerY - geom.gdTop - h / 2, geom.top), geom.bottom - h);
 
-    box.setAttribute('transform', `translate(${m[1]},${top - gd.getBoundingClientRect().top})`);
+    const next = `translate(${x},${y})`;
+    if (transform !== next) box.setAttribute('transform', next);
+  }
+
+  // Plotly replaces .hoverlayer's contents as it draws, so observe the chart
+  // subtree rather than a node that will be swapped out from under us.
+  new MutationObserver(place).observe(gd, {
+    subtree: true, childList: true, attributes: true, attributeFilter: ['transform'],
   });
+
+  gd.addEventListener('mouseenter', e => { geom = readGeometry(); pointerY = e.clientY; place(); });
+  gd.addEventListener('mousemove',  e => { pointerY = e.clientY; place(); });
+  gd.addEventListener('mouseleave', () => { pointerY = null; });
 }
 
 followCursorHover(chartEl);
+
+// ── Drawing resolution ──────────────────────────────────────────────────
+// A year of five-minute readings is well over a hundred thousand points per
+// series, against a chart maybe seven hundred pixels wide. Handing all of them
+// to Plotly costs a slow redraw and, far worse, a hover that has to search
+// every point: measured at around ten seconds per pointer move on a full
+// dataset. So the line is drawn at the resolution the screen can actually
+// show, and the resolution is recomputed as the view changes — zoom in and the
+// bins narrow with the window until, once a bin holds a single reading, what
+// is drawn IS the raw data.
+//
+// Each bin contributes its lowest and highest reading rather than an average,
+// in the order they were recorded. Averaging would flatten exactly the spikes
+// worth looking at — an HVAC cycle, a gust — whereas keeping both extremes
+// preserves the envelope the eye reads off the line.
+const DECIMATE_OVERVIEW = 900;    // bins spanning everything loaded
+const DECIMATE_DETAIL   = 1300;   // bins spanning the zoomed-in window
+
+// The window currently shown, as [msFrom, msTo], or null when the chart is
+// showing everything. Set from Plotly's own zoom and pan events.
+let chartView = null;
+let redrawingChart = false;   // guards the redraw a zoom triggers from re-entering
+
+// How far apart two readings have to be before the line should break rather
+// than span the interval. Derived from the data's own cadence so it holds for
+// a five-minute station and an hourly one alike, and so that zooming past the
+// sampling rate — where most bins are empty simply because there is nothing
+// that fine — does not shatter the line into disconnected points.
+function seriesGapMs(rows) {
+  const n = rows.length;
+  if (n < 3) return Infinity;
+  const step = Math.max(1, Math.floor(n / 400));
+  const deltas = [];
+  for (let i = step; i < n; i += step) deltas.push(+rows[i].ts - +rows[i - step].ts);
+  if (!deltas.length) return Infinity;
+  deltas.sort((a, b) => a - b);
+  return (deltas[deltas.length >> 1] / step) * 3;
+}
+
+function decimateColumn(rows, col, t0, t1, bins, gapMs) {
+  const width = (t1 - t0) / bins;
+  if (!(width > 0)) return { x: [], y: [] };
+
+  const x = [], y = [];
+  let binEnd = t0 + width;
+  let loI = -1, hiI = -1, lo = Infinity, hi = -Infinity;
+  let lastValueT = null;    // when this column last had a reading
+  let gapAt = null;         // a stretch with no readings, waiting to be drawn
+
+  // A bin contributes its extremes, oldest first, joined to each other: they
+  // bracket a continuous run of readings however far apart the two happen to
+  // sit. Breaks are decided from the readings themselves — a stretch with none
+  // at all — not from the spacing of the points that get emitted, which at low
+  // zoom can be hours apart inside a single bin without anything missing.
+  const flush = () => {
+    if (loI >= 0) {
+      if (gapAt !== null) { x.push(new Date(gapAt)); y.push(null); gapAt = null; }
+      const a = Math.min(loI, hiI), b = Math.max(loI, hiI);
+      x.push(rows[a].ts); y.push(rows[a][col]);
+      if (b !== a) { x.push(rows[b].ts); y.push(rows[b][col]); }
+    }
+    loI = hiI = -1; lo = Infinity; hi = -Infinity;
+  };
+
+  for (let i = 0; i < rows.length; i++) {
+    const t = +rows[i].ts;
+    if (t < t0) continue;
+    if (t > t1) break;
+    while (t > binEnd) { flush(); binEnd += width; }
+    const v = rows[i][col];
+    if (typeof v !== 'number' || isNaN(v)) continue;
+    if (lastValueT !== null && t - lastValueT > gapMs) gapAt = lastValueT + gapMs / 2;
+    lastValueT = t;
+    if (v < lo) { lo = v; loI = i; }
+    if (v > hi) { hi = v; hiI = i; }
+  }
+  flush();
+  return { x, y };
+}
+
+// Detail inside the visible window, a coarse pass either side of it. The
+// coarse tail is what keeps the range slider showing the shape of the whole
+// dataset while the main axis is zoomed into a corner of it.
+function decimateForView(rows, col, view, full, gapMs) {
+  const detail = decimateColumn(rows, col, view[0], view[1], DECIMATE_DETAIL, gapMs);
+  if (view[0] <= full[0] && view[1] >= full[1]) return detail;
+
+  const coarse = decimateColumn(rows, col, full[0], full[1], DECIMATE_OVERVIEW, gapMs);
+  const x = [], y = [];
+  for (let i = 0; i < coarse.x.length; i++) if (+coarse.x[i] < view[0]) { x.push(coarse.x[i]); y.push(coarse.y[i]); }
+  for (let i = 0; i < detail.x.length; i++) { x.push(detail.x[i]); y.push(detail.y[i]); }
+  for (let i = 0; i < coarse.x.length; i++) if (+coarse.x[i] > view[1]) { x.push(coarse.x[i]); y.push(coarse.y[i]); }
+  return { x, y };
+}
 
 // ── Chart rendering ──────────────────────────────────────────────────────
 let chartRendered = false;
@@ -1553,14 +1684,23 @@ function renderChart() {
   const traces = [];
   let totalAnomalies = 0;
 
+  // The window to draw at full detail: whatever the chart is zoomed to, or
+  // everything. A stale zoom from a previous date range is discarded.
+  const full = [+filtered[0].ts, +filtered[filtered.length - 1].ts];
+  if (chartView && (chartView[0] >= chartView[1] ||
+                    chartView[1] < full[0] || chartView[0] > full[1])) chartView = null;
+  const view  = chartView || full;
+  const gapMs = seriesGapMs(filtered);
+
   // ── Observation traces ─────────────────────────────────────────────
   columns.forEach((col, i) => {
     if (!checkedCols.has(col)) return;
     const color  = seriesColor(col, i);
     const yvals  = filtered.map(r => typeof r[col] === 'number' ? r[col] : null);
+    const drawn  = decimateForView(filtered, col, view, full, gapMs);
 
     traces.push({
-      x: times, y: yvals,
+      x: drawn.x, y: drawn.y,
       name: col,
       type: 'scattergl',
       mode: 'lines',
@@ -1613,6 +1753,9 @@ function renderChart() {
     xaxis: {
       type: 'date',
       gridcolor: PLOT_GRID, linecolor: PLOT_GRID, tickcolor: PLOT_GRID,
+      // Redrawing at a new resolution replaces the data, so the zoom has to be
+      // restated or Plotly would autorange straight back out.
+      ...(chartView ? { range: [new Date(view[0]), new Date(view[1])] } : { autorange: true }),
       rangeslider: { visible: true, bgcolor: PLOT_PANEL, bordercolor: PLOT_GRID, thickness: 0.04 },
     },
     yaxis: {
@@ -1633,6 +1776,30 @@ function renderChart() {
   else {
     Plotly.newPlot(chartEl, traces, layout, config);
     chartRendered = true;
+
+    // Zoom and pan change which window is on screen, so redraw it at the
+    // resolution that window deserves. Plotly moves the axis; the data behind
+    // it is ours to replace, and this is what makes zooming actually reveal
+    // more detail rather than just magnifying the bins already drawn.
+    chartEl.on('plotly_relayout', evt => {
+      if (redrawingChart) return;
+
+      let next;
+      const x0 = evt['xaxis.range[0]'], x1 = evt['xaxis.range[1]'];
+      if (x0 != null && x1 != null)              next = [+new Date(x0), +new Date(x1)];
+      else if (Array.isArray(evt['xaxis.range'])) next = evt['xaxis.range'].map(v => +new Date(v));
+      else if (evt['xaxis.autorange'])            next = null;
+      else return;                                // a resize or some other relayout
+
+      const unchanged = (!next && !chartView) ||
+        (next && chartView && next[0] === chartView[0] && next[1] === chartView[1]);
+      if (unchanged) return;
+
+      chartView = next;
+      redrawingChart = true;
+      try { renderChart(); } finally { redrawingChart = false; }
+    });
+
     // Sync analysis panel when user drag-zooms or double-click resets the chart
     chartEl.on('plotly_relayout', evt => {
       if (!analysisPanel.classList.contains('visible')) return;
