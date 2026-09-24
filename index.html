@@ -1239,7 +1239,7 @@ function buildSidebar() {
     });
 
     const name = document.createElement('span');
-    name.className = 'series-name'; name.textContent = col;
+    name.className = 'series-name'; name.textContent = displayName(col); name.title = col;
 
     item.append(cb, swatch, name);
 
@@ -1723,6 +1723,13 @@ function decimateForView(rows, col, view, full, gapMs, bins) {
 // whatever a meter reports next.
 const RIGHT_AXIS_UNITS = /^kWh$/i;
 
+// How a channel is written for people. "Temperature" is the one word long
+// enough to crowd the series list, the legend and the hover box, and it says
+// nothing the shorter form doesn't. Display only: colours, ignore periods,
+// sensor roles and every other lookup stay keyed on the column's real name,
+// which is whatever the CSV or the meter called it.
+function displayName(col) { return col.replace(/\bTemperature\b/g, 'Temp'); }
+
 function unitOf(col) {
   const m = /\(([^)]*)\)\s*$/.exec(col);
   return m ? m[1] : '';
@@ -1781,7 +1788,7 @@ function renderChart() {
 
     traces.push({
       x: drawn.x, y: drawn.y,
-      name: col,
+      name: displayName(col),
       type: 'scattergl',
       mode: 'lines',
       line: { color, width: 1.5 },
@@ -1814,7 +1821,7 @@ function renderChart() {
         });
         traces.push({
           x: ax, y: ay, text: at,
-          name: `⚠ ${col}`,
+          name: `⚠ ${displayName(col)}`,
           type: 'scattergl',
           mode: 'markers',
           marker: { color: '#f59e0b', size: 7, symbol: 'circle', line: { color: '#000', width: 1 } },
@@ -1839,7 +1846,10 @@ function renderChart() {
     paper_bgcolor: PLOT_BG,
     plot_bgcolor:  PLOT_BG,
     font: { color: PLOT_TEXT, family: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', size: 11 },
-    margin: { t: 16, r: 16, b: 50, l: 56 },
+    // A right-hand axis needs room for its tick labels and title; 16px is
+    // only enough when the axis isn't there, and the labels get clipped to
+    // their integer part.
+    margin: { t: 16, r: useRight ? 64 : 16, b: 50, l: 56 },
     legend: {
       bgcolor: PLOT_PANEL, bordercolor: PLOT_GRID, borderwidth: 1,
       orientation: 'h', x: 0, y: -0.15, xanchor: 'left',
@@ -1861,6 +1871,10 @@ function renderChart() {
     ...(useRight ? { yaxis2: {
       title: { text: rightUnit, font: { color: rightTint, size: 11 }, standoff: 6 },
       overlaying: 'y', side: 'right',
+      // No explicit tickformat. Energy spans a wide range of magnitudes —
+      // around 2 kWh across two years, a twentieth of that within a day — and
+      // a fixed one decimal turns every tick on a zoomed-in day into "0.1".
+      // Plotly picks the precision from the range, which is what adapts.
       showgrid: false, zeroline: false,
       linecolor: PLOT_GRID, tickcolor: PLOT_GRID,
       tickfont: { color: rightTint },
@@ -1953,7 +1967,7 @@ function updateStatsBar(filtered) {
     chip.className = 'stat-chip';
     chip.innerHTML = `
       <div class="stat-swatch" style="background:${color}"></div>
-      <span class="stat-label" title="${col}">${col}</span>
+      <span class="stat-label" title="${col}">${displayName(col)}</span>
       <div class="stat-values">
         <span>min <b>${min.toFixed(1)}</b></span>
         <span>avg <b>${avg.toFixed(1)}</b></span>
