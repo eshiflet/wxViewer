@@ -984,15 +984,29 @@ function isIgnored(ts, rule) {
 // never modified, so widening or clearing a period brings the readings back
 // immediately with no reload. Rows are only copied when a rule actually hides
 // a value in them, so the common case costs nothing.
+//
+// Memoized: renderChart() calls this on every zoom/pan tick, series toggle,
+// colour change and anomaly toggle, none of which change which rows are
+// visible. Recomputing the filter+mask over the full dataset on each of those
+// was the dominant cost of a chart redraw. The cache key is the actual inputs
+// (by reference for allRows/ignoreRules, by value for the dates), so it can
+// never go stale — no separate invalidation calls to keep in sync.
+let _visibleCache = { allRows: null, dateFrom: NaN, dateTo: NaN, ignoreRules: null, result: [] };
 function visibleRows() {
+  const df = dateFrom ? +dateFrom : null;
+  const dt = dateTo   ? +dateTo   : null;
+  const c = _visibleCache;
+  if (c.allRows === allRows && c.dateFrom === df && c.dateTo === dt && c.ignoreRules === ignoreRules) {
+    return c.result;
+  }
+
   const inRange = allRows.filter(r => {
     if (dateFrom && r.ts < dateFrom) return false;
     if (dateTo   && r.ts > dateTo)   return false;
     return true;
   });
-  if (!ignoreRules.length) return inRange;
 
-  return inRange.map(r => {
+  const result = !ignoreRules.length ? inRange : inRange.map(r => {
     let masked = null;
     for (const [col, rule] of ignoreRules) {
       if (r[col] == null) continue;
@@ -1002,6 +1016,10 @@ function visibleRows() {
     }
     return masked || r;
   });
+
+  _visibleCache = { allRows, dateFrom: df, dateTo: dt, ignoreRules, result };
+  seriesGapCache.clear();
+  return result;
 }
 
 // Merge one file's header list into the running column list, preserving order.
@@ -1644,6 +1662,18 @@ let redrawingChart = false;   // guards the redraw a zoom triggers from re-enter
 // meter interval sits among five-minute station readings — so a single global
 // figure would break the slower series at every one of its own samples.
 // Sampling rather than scanning keeps it cheap on a long series.
+// Cached per column and cleared whenever visibleRows() produces a new result
+// (see there) — the gap is a property of the column's own cadence across the
+// filtered rows, not of the zoom window, so recomputing it on every zoom/pan
+// tick (it was previously called fresh per column per redraw) bought nothing.
+const seriesGapCache = new Map();
+function cachedSeriesGapMs(rows, col) {
+  if (seriesGapCache.has(col)) return seriesGapCache.get(col);
+  const v = seriesGapMs(rows, col);
+  seriesGapCache.set(col, v);
+  return v;
+}
+
 function seriesGapMs(rows, col) {
   const at = [];
   const stride = Math.max(1, Math.floor(rows.length / 3000));
@@ -1657,6 +1687,19 @@ function seriesGapMs(rows, col) {
   deltas.sort((a, b) => a - b);
   const median = deltas[deltas.length >> 1] / stride;
   return median > 0 ? median * 3 : Infinity;
+}
+
+// First index whose ts is >= t. `rows` is always chronological (allRows is
+// sorted once in rebuildDataset and every later filter/map preserves order),
+// so decimateColumn can jump straight to the visible window instead of
+// scanning every row from the start of the dataset on every zoom/pan tick.
+function lowerBound(rows, t) {
+  let lo = 0, hi = rows.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (+rows[mid].ts < t) lo = mid + 1; else hi = mid;
+  }
+  return lo;
 }
 
 function decimateColumn(rows, col, t0, t1, bins, gapMs) {
@@ -1684,9 +1727,8 @@ function decimateColumn(rows, col, t0, t1, bins, gapMs) {
     loI = hiI = -1; lo = Infinity; hi = -Infinity;
   };
 
-  for (let i = 0; i < rows.length; i++) {
+  for (let i = lowerBound(rows, t0); i < rows.length; i++) {
     const t = +rows[i].ts;
-    if (t < t0) continue;
     if (t > t1) break;
     while (t > binEnd) { flush(); binEnd += width; }
     const v = rows[i][col];
@@ -1757,7 +1799,9 @@ function renderChart() {
   emptyState.style.display = 'none';
   chartEl.style.display    = 'block';
 
-  const times  = filtered.map(r => r.ts);
+  // times/yvals below are only needed for anomaly markers — skip the
+  // allocation (one array per selected series) when that toggle is off.
+  const times  = showAnomalies ? filtered.map(r => r.ts) : null;
   const traces = [];
   let totalAnomalies = 0;
 
@@ -1783,8 +1827,8 @@ function renderChart() {
     if (!checkedCols.has(col)) return;
     const color  = seriesColor(col, i);
     const onRight = useRight && usesRightAxis(col);
-    const yvals  = filtered.map(r => typeof r[col] === 'number' ? r[col] : null);
-    const drawn  = decimateForView(filtered, col, view, full, seriesGapMs(filtered, col), bins);
+    const yvals  = showAnomalies ? filtered.map(r => typeof r[col] === 'number' ? r[col] : null) : null;
+    const drawn  = decimateForView(filtered, col, view, full, cachedSeriesGapMs(filtered, col), bins);
 
     traces.push({
       x: drawn.x, y: drawn.y,
