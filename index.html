@@ -1082,19 +1082,29 @@ const anomalyLegend  = document.getElementById('anomaly-legend');
 const exportBtn        = document.getElementById('export-btn');
 const statsBar         = document.getElementById('stats-bar');
 
-// The header's one-line description of what is loaded: where it came from,
-// how much of it there is, and what span it covers. Callers say only what they
-// loaded; the counts and the span are read back off allRows so they can never
-// drift from the data actually in hand.
+// The header's one-line description of what is loaded: where each source
+// came from, how much of it there is, and what span it covers. Callers say
+// only where they loaded from; the counts and spans are read back off
+// weatherRows/energyRows so they can never drift from the data actually in
+// hand. Kept as two source-specific segments rather than one joined figure —
+// a joined count is the number of shared rows in allRows, which undercounts
+// either source whenever their timestamps don't line up (a fifteen-minute
+// meter interval among five-minute station readings, mostly).
 const datasetSources = { weather: null, energy: null };
 
 function updateDatasetLabel() {
-  if (!allRows.length) { dataRangeLabel.textContent = ''; return; }
-  const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
-  const from = [datasetSources.weather, datasetSources.energy].filter(Boolean).join(' + ');
-  dataRangeLabel.textContent =
-    `Dataset: ${from} · ${allRows.length.toLocaleString()} readings`
-    + ` · ${fmtDate(first)} – ${fmtDate(last)}`;
+  const segments = [];
+  if (weatherRows.length) {
+    const first = weatherRows[0].ts, last = weatherRows[weatherRows.length - 1].ts;
+    segments.push(`Weather Dataset: ${datasetSources.weather} · ${weatherRows.length.toLocaleString()} readings`
+      + ` · ${fmtDate(first)} – ${fmtDate(last)}`);
+  }
+  if (energyRows.length) {
+    const first = energyRows[0].ts, last = energyRows[energyRows.length - 1].ts;
+    segments.push(`Green Button: ${energyRows.length.toLocaleString()} intervals`
+      + ` · ${fmtDate(first)} – ${fmtDate(last)}`);
+  }
+  dataRangeLabel.textContent = segments.join('; ');
 }
 
 // Fold the sources into one row list. A reading that lands on a timestamp the
