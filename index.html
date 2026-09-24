@@ -587,7 +587,8 @@
     </span>
   </label>
   <input type="file" id="file-input" accept=".csv" multiple>
-  <button class="btn secondary" id="auto-load-btn" title="Pick a folder of CSV files — remembered for next visit">📂 Open Folder</button>
+  <button class="btn secondary" id="auto-load-btn" title="Pick a folder of weather station CSV files — remembered for next visit">📂 Weather Data</button>
+  <button class="btn secondary" id="greenbutton-btn" title="Pick a folder of Green Button XML exports — remembered for next visit">⚡ Green Button Data</button>
   <span id="file-status">No files loaded</span>
 
   <div class="divider"></div>
@@ -1023,6 +1024,13 @@ function mergeColumns(existing, headers) {
 }
 
 // ── State ───────────────────────────────────────────────────────────────
+// The station and the utility are independent sources on different cadences —
+// five-minute readings against fifteen-minute intervals, over ranges that only
+// partly overlap. Each is kept as it was loaded and the two are joined on the
+// timestamp into allRows, so loading one never disturbs the other and the
+// order they arrive in does not matter.
+let weatherRows  = [], weatherCols = [];
+let energyRows   = [], energyCols  = [];
 let allRows      = [];
 let columns      = [];
 let checkedCols  = new Set();
@@ -1057,15 +1065,48 @@ const exportBtn        = document.getElementById('export-btn');
 const statsBar         = document.getElementById('stats-bar');
 
 // The header's one-line description of what is loaded: where it came from,
-// how much of it there is, and what span it covers. `source` is the only part
-// the caller knows — the rest is read back off allRows so it can never drift
-// from the data actually in hand.
-function updateDatasetLabel(source) {
+// how much of it there is, and what span it covers. Callers say only what they
+// loaded; the counts and the span are read back off allRows so they can never
+// drift from the data actually in hand.
+const datasetSources = { weather: null, energy: null };
+
+function updateDatasetLabel() {
   if (!allRows.length) { dataRangeLabel.textContent = ''; return; }
   const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
+  const from = [datasetSources.weather, datasetSources.energy].filter(Boolean).join(' + ');
   dataRangeLabel.textContent =
-    `Dataset: ${source} · ${allRows.length.toLocaleString()} readings`
+    `Dataset: ${from} · ${allRows.length.toLocaleString()} readings`
     + ` · ${fmtDate(first)} – ${fmtDate(last)}`;
+}
+
+// Fold the sources into one row list. A reading that lands on a timestamp the
+// other source already has joins that row; anything else becomes a row of its
+// own, which is what lets utility data from before the station existed sit on
+// the same axis. Rows are rebuilt rather than mutated so reloading one source
+// cannot leave the other's values behind.
+function rebuildDataset() {
+  const byTs = new Map();
+  for (const r of weatherRows) byTs.set(+r.ts, { ...r });
+  for (const r of energyRows) {
+    const at = byTs.get(+r.ts);
+    if (at) Object.assign(at, r);
+    else byTs.set(+r.ts, { ...r });
+  }
+  allRows = [...byTs.values()].sort((a, b) => a.ts - b.ts);
+  columns = [...weatherCols, ...energyCols.filter(c => !weatherCols.includes(c))];
+
+  chartView = null;
+  if (allRows.length) {
+    const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
+    dateFrom = first; dateTo = last;
+    dateFromEl.value = toDateTimeInput(first);
+    dateToEl.value   = toDateTimeInput(last);
+  }
+  updateDatasetLabel();
+  buildSidebar();
+  showLoading(false);
+  renderChart();
+  if (analysisPanel.classList.contains('visible')) renderActiveView();
 }
 
 // ── CSV Parser ──────────────────────────────────────────────────────────
@@ -1118,20 +1159,10 @@ fileInput.addEventListener('change', async e => {
     allParsed.push(...rows);
   }
   allParsed.sort((a, b) => a.ts - b.ts);
-  allRows = allParsed; columns = cols;
-
+  weatherRows = allParsed; weatherCols = cols;
+  datasetSources.weather = `${files.length} weather file${files.length > 1 ? 's' : ''}`;
   fileStatus.textContent = '';
-  updateDatasetLabel(`${files.length} file${files.length > 1 ? 's' : ''}`);
-
-  if (allRows.length) {
-    const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
-    dateFrom = first; dateTo = last;
-    dateFromEl.value = toDateTimeInput(first);
-    dateToEl.value   = toDateTimeInput(last);
-  }
-  buildSidebar();
-  showLoading(false);
-  renderChart();
+  rebuildDataset();
 });
 
 function readFile(f) {
@@ -1152,18 +1183,10 @@ document.getElementById('sample-data-btn').addEventListener('click', async () =>
     const text = await res.text();
     const { headers, rows } = parseCSV(text);
     rows.sort((a, b) => a.ts - b.ts);
-    allRows = rows; columns = headers;
+    weatherRows = rows; weatherCols = headers;
+    datasetSources.weather = 'Sample data';
     fileStatus.textContent = '';
-    updateDatasetLabel('Sample data');
-    if (allRows.length) {
-      const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
-      dateFrom = first; dateTo = last;
-      dateFromEl.value = toDateTimeInput(first);
-      dateToEl.value   = toDateTimeInput(last);
-    }
-    buildSidebar();
-    showLoading(false);
-    renderChart();
+    rebuildDataset();
   } catch (e) {
     showLoading(false);
     fileStatus.textContent = `Could not load sample data: ${e.message}`;
@@ -1183,8 +1206,15 @@ function buildSidebar() {
   sidebarActions.style.display = 'flex';
   checkedCols.clear();
 
+  // Temperature channels start selected. A dataset with none — utility data on
+  // its own, say — would otherwise open to an empty chart, so it falls back to
+  // the first series that carries numbers.
+  const anyTemp = columns.some(c => DEFAULT_SELECTED_RE.test(c));
+  const firstNumeric = anyTemp ? null
+    : columns.find(c => allRows.some(r => typeof r[c] === 'number' && !isNaN(r[c])));
+
   columns.forEach((col, i) => {
-    if (DEFAULT_SELECTED_RE.test(col)) checkedCols.add(col);
+    if (anyTemp ? DEFAULT_SELECTED_RE.test(col) : col === firstNumeric) checkedCols.add(col);
 
     const item = document.createElement('label');
     item.className = 'series-item';
@@ -1609,19 +1639,24 @@ let chartView = null;
 let redrawingChart = false;   // guards the redraw a zoom triggers from re-entering
 
 // How far apart two readings have to be before the line should break rather
-// than span the interval. Derived from the data's own cadence so it holds for
-// a five-minute station and an hourly one alike, and so that zooming past the
-// sampling rate — where most bins are empty simply because there is nothing
-// that fine — does not shatter the line into disconnected points.
-function seriesGapMs(rows) {
-  const n = rows.length;
-  if (n < 3) return Infinity;
-  const step = Math.max(1, Math.floor(n / 400));
+// than span the interval. Measured from THIS column's own readings, not from
+// the row grid: sources of different cadence share that grid — a fifteen-minute
+// meter interval sits among five-minute station readings — so a single global
+// figure would break the slower series at every one of its own samples.
+// Sampling rather than scanning keeps it cheap on a long series.
+function seriesGapMs(rows, col) {
+  const at = [];
+  const stride = Math.max(1, Math.floor(rows.length / 3000));
+  for (let i = 0; i < rows.length; i += stride) {
+    const v = rows[i][col];
+    if (typeof v === 'number' && !isNaN(v)) at.push(+rows[i].ts);
+  }
+  if (at.length < 3) return Infinity;
   const deltas = [];
-  for (let i = step; i < n; i += step) deltas.push(+rows[i].ts - +rows[i - step].ts);
-  if (!deltas.length) return Infinity;
+  for (let i = 1; i < at.length; i++) deltas.push(at[i] - at[i - 1]);
   deltas.sort((a, b) => a - b);
-  return (deltas[deltas.length >> 1] / step) * 3;
+  const median = deltas[deltas.length >> 1] / stride;
+  return median > 0 ? median * 3 : Infinity;
 }
 
 function decimateColumn(rows, col, t0, t1, bins, gapMs) {
@@ -1680,6 +1715,20 @@ function decimateForView(rows, col, view, full, gapMs, bins) {
   return { x, y };
 }
 
+// ── Second y-axis ───────────────────────────────────────────────────────
+// Energy and temperature share a time axis but nothing else: a quarter-hour
+// of electricity is a number around one, a temperature is around seventy, so
+// on one scale the smaller series flattens into the axis and reads as nothing.
+// Units named in a column's parentheses decide this, so it generalises to
+// whatever a meter reports next.
+const RIGHT_AXIS_UNITS = /^kWh$/i;
+
+function unitOf(col) {
+  const m = /\(([^)]*)\)\s*$/.exec(col);
+  return m ? m[1] : '';
+}
+function usesRightAxis(col) { return RIGHT_AXIS_UNITS.test(unitOf(col)); }
+
 // ── Chart rendering ──────────────────────────────────────────────────────
 let chartRendered = false;
 
@@ -1711,15 +1760,24 @@ function renderChart() {
   if (chartView && (chartView[0] >= chartView[1] ||
                     chartView[1] < full[0] || chartView[0] > full[1])) chartView = null;
   const view  = chartView || full;
-  const gapMs = seriesGapMs(filtered);
   const bins  = decimateBins();
+
+  // A right-hand axis only earns its place when something is left on the
+  // left. If every selected series is an energy one they simply share the
+  // primary axis, rather than leaving an empty scale on one side.
+  const selected  = columns.filter(c => checkedCols.has(c));
+  const rightCols = selected.filter(usesRightAxis);
+  const useRight  = rightCols.length > 0 && rightCols.length < selected.length;
+  const rightUnit = rightCols.length ? unitOf(rightCols[0]) : '';
+  const rightTint = rightCols.length ? seriesColor(rightCols[0], columns.indexOf(rightCols[0])) : PLOT_TEXT;
 
   // ── Observation traces ─────────────────────────────────────────────
   columns.forEach((col, i) => {
     if (!checkedCols.has(col)) return;
     const color  = seriesColor(col, i);
+    const onRight = useRight && usesRightAxis(col);
     const yvals  = filtered.map(r => typeof r[col] === 'number' ? r[col] : null);
-    const drawn  = decimateForView(filtered, col, view, full, gapMs, bins);
+    const drawn  = decimateForView(filtered, col, view, full, seriesGapMs(filtered, col), bins);
 
     traces.push({
       x: drawn.x, y: drawn.y,
@@ -1727,7 +1785,10 @@ function renderChart() {
       type: 'scattergl',
       mode: 'lines',
       line: { color, width: 1.5 },
+      // A null is a reading the meter or station never recorded, so the line
+      // breaks there rather than bridging across the outage.
       connectgaps: false,
+      ...(onRight ? { yaxis: 'y2' } : {}),
     });
 
     // Anomaly markers on top
@@ -1749,6 +1810,7 @@ function renderChart() {
           marker: { color: '#f59e0b', size: 7, symbol: 'circle', line: { color: '#000', width: 1 } },
           hovertemplate: '%{text}<extra>anomaly</extra>',
           showlegend: false,
+          ...(onRight ? { yaxis: 'y2' } : {}),
         });
       }
     }
@@ -1783,6 +1845,16 @@ function renderChart() {
     yaxis: {
       gridcolor: PLOT_GRID, linecolor: PLOT_GRID, tickcolor: PLOT_GRID, zeroline: false,
     },
+    // Tinted to its series and drawn without gridlines: two sets of horizontal
+    // lines at different scales read as noise, and the left grid is the one
+    // the eye should follow.
+    ...(useRight ? { yaxis2: {
+      title: { text: rightUnit, font: { color: rightTint, size: 11 }, standoff: 6 },
+      overlaying: 'y', side: 'right',
+      showgrid: false, zeroline: false,
+      linecolor: PLOT_GRID, tickcolor: PLOT_GRID,
+      tickfont: { color: rightTint },
+    } } : {}),
     hovermode: 'x unified',
     hoverlabel: { bgcolor: PLOT_PANEL, bordercolor: PLOT_GRID, font: { color: PLOT_TEXT, size: 11 } },
   };
@@ -2384,18 +2456,67 @@ function renderChartAndAnalysis() {
   if (analysisPanel.classList.contains('visible')) renderActiveView();
 }
 
-// ── Folder-based auto-load (File System Access API + IndexedDB persistence) ──
-const DIR_HANDLE_DB  = 'wxviewer-dir-handle';
-const DIR_HANDLE_KEY = 'dirHandle';
+// ── Green Button (NAESB ESPI) ───────────────────────────────────────────
+// The utility publishes interval meter data as an Atom feed. Units are not
+// assumed: ReadingType carries the unit of measure and a power-of-ten
+// multiplier, and those are what the raw values have to be scaled by. Cost,
+// where present, is in hundred-thousandths of the currency unit.
+const GB_ENERGY_COL = 'Electricity (kWh)';
+const GB_COST_COL   = 'Electricity Cost ($)';
+const ESPI_WATT_HOURS = 72;   // uom code
 
-async function getStoredDirHandle() {
+// The feed carries a per-interval cost as well as the energy. Reading it is a
+// line of code and the scaling is known — hundred-thousandths of the currency
+// unit — but nothing is being done with money yet, so it is left out of the
+// dataset entirely rather than sitting in the series list as clutter. Flip
+// this to surface it.
+const GB_INCLUDE_COST = false;
+
+function parseGreenButton(text) {
+  const tag = (blk, name) => {
+    const m = new RegExp(`<espi:${name}>(-?\\d+)</espi:${name}>`).exec(blk);
+    return m ? +m[1] : null;
+  };
+  const rt = /<espi:ReadingType>([\s\S]*?)<\/espi:ReadingType>/.exec(text);
+  const pot = rt ? (tag(rt[1], 'powerOfTenMultiplier') ?? 0) : 0;
+  const uom = rt ? tag(rt[1], 'uom') : ESPI_WATT_HOURS;
+  if (uom !== null && uom !== ESPI_WATT_HOURS) return { rows: [], uom };
+
+  const scale = Math.pow(10, pot) / 1000;        // raw -> kWh
+  const out = [];
+  const re = /<espi:IntervalReading>([\s\S]*?)<\/espi:IntervalReading>/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const blk = m[1];
+    // The only <espi:start> inside a reading is its own timePeriod's.
+    const start = tag(blk, 'start');
+    const value = tag(blk, 'value');
+    if (start === null || value === null) continue;
+    const row = { ts: new Date(start * 1000), [GB_ENERGY_COL]: value * scale };
+    if (GB_INCLUDE_COST) {
+      const cost = tag(blk, 'cost');
+      if (cost !== null) row[GB_COST_COL] = cost / 1e5;
+    }
+    out.push(row);
+  }
+  return { rows: out, uom };
+}
+
+// ── Folder-based auto-load (File System Access API + IndexedDB persistence) ──
+// One remembered folder per source, so the station's CSVs and the utility's
+// exports can live in different places.
+const DIR_HANDLE_DB = 'wxviewer-dir-handle';
+const DIR_WEATHER   = 'dirHandle';        // original key; kept so existing users keep their folder
+const DIR_ENERGY    = 'greenButtonDir';
+
+async function getStoredDirHandle(key = DIR_WEATHER) {
   return new Promise(resolve => {
     const req = indexedDB.open(DIR_HANDLE_DB, 1);
     req.onupgradeneeded = e => e.target.result.createObjectStore('handles');
     req.onsuccess = e => {
       const db = e.target.result;
       const tx = db.transaction('handles', 'readonly');
-      const get = tx.objectStore('handles').get(DIR_HANDLE_KEY);
+      const get = tx.objectStore('handles').get(key);
       get.onsuccess = () => resolve(get.result || null);
       get.onerror   = () => resolve(null);
     };
@@ -2403,14 +2524,14 @@ async function getStoredDirHandle() {
   });
 }
 
-async function storeDirHandle(handle) {
+async function storeDirHandle(handle, key = DIR_WEATHER) {
   return new Promise(resolve => {
     const req = indexedDB.open(DIR_HANDLE_DB, 1);
     req.onupgradeneeded = e => e.target.result.createObjectStore('handles');
     req.onsuccess = e => {
       const db = e.target.result;
       const tx = db.transaction('handles', 'readwrite');
-      tx.objectStore('handles').put(handle, DIR_HANDLE_KEY);
+      tx.objectStore('handles').put(handle, key);
       tx.oncomplete = resolve;
       tx.onerror    = resolve;
     };
@@ -2430,32 +2551,74 @@ async function loadFromDirHandle(dirHandle) {
     cols = mergeColumns(cols, headers);
     allParsed.push(...rows);
   }
-  if (!count) { fileStatus.textContent = 'No CSV files found in that folder'; return; }
+  if (!count) { showLoading(false); fileStatus.textContent = 'No CSV files found in that folder'; return; }
   allParsed.sort((a, b) => a.ts - b.ts);
-  allRows = allParsed; columns = cols;
+  weatherRows = allParsed; weatherCols = cols;
+  datasetSources.weather = `${count} weather file${count > 1 ? 's' : ''}`;
   fileStatus.textContent = '';
-  updateDatasetLabel(`${count} file${count > 1 ? 's' : ''}`);
-  if (allRows.length) {
-    const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
-    dateFrom = first; dateTo = last;
-    dateFromEl.value = toDateTimeInput(first);
-    dateToEl.value   = toDateTimeInput(last);
-  }
-  buildSidebar();
-  showLoading(false);
-  renderChart();
+  rebuildDataset();
 }
 
-document.getElementById('auto-load-btn').addEventListener('click', async () => {
+// Exports overlap: the utility serves a rolling window, so consecutive
+// downloads share their ends, and a merged file shares everything with the
+// parts it was built from. Readings are unioned on their interval start, which
+// is the natural key — one reading per interval — so duplication across files
+// collapses on its own however tangled the folder is. Files are taken in name
+// order purely so the outcome is the same every time.
+async function loadGreenButtonDir(dirHandle) {
+  const entries = [];
+  for await (const e of dirHandle.values()) {
+    if (e.kind === 'file' && /\.xml$/i.test(e.name)) entries.push(e);
+  }
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+
+  if (!entries.length) {
+    showLoading(false);
+    fileStatus.textContent = 'No Green Button XML files found in that folder';
+    return;
+  }
+
+  const byTs = new Map();
+  let seen = 0, skipped = 0, wrongUnits = 0;
+  for (const e of entries) {
+    showLoading(true, `Reading ${e.name}…`);
+    await sleep(0);
+    const { rows, uom } = parseGreenButton(await (await e.getFile()).text());
+    if (!rows.length && uom !== null && uom !== ESPI_WATT_HOURS) { wrongUnits++; continue; }
+    seen += rows.length;
+    for (const r of rows) byTs.set(+r.ts, r);
+  }
+  skipped = seen - byTs.size;
+
+  if (!byTs.size) {
+    showLoading(false);
+    fileStatus.textContent = wrongUnits
+      ? `${wrongUnits} file(s) are not in watt-hours — not supported`
+      : 'No interval readings found in those files';
+    return;
+  }
+
+  energyRows = [...byTs.values()].sort((a, b) => a.ts - b.ts);
+  energyCols = [GB_ENERGY_COL, ...(GB_INCLUDE_COST && energyRows.some(r => GB_COST_COL in r) ? [GB_COST_COL] : [])];
+  datasetSources.energy =
+    `${entries.length} Green Button file${entries.length > 1 ? 's' : ''}`;
+  fileStatus.textContent = skipped
+    ? `${byTs.size.toLocaleString()} intervals · ${skipped.toLocaleString()} duplicate readings merged`
+    : '';
+  rebuildDataset();
+}
+
+// Shared by both folder buttons: reuse the remembered folder when its
+// permission still stands, otherwise ask for one.
+async function pickAndLoadFolder({ key, button, load, waiting }) {
   if (!window.showDirectoryPicker) {
     fileStatus.textContent = 'Directory picker not supported in this browser — use "Load CSV files" instead';
     return;
   }
-  showLoading(true, 'Waiting for folder selection…');
+  showLoading(true, waiting);
   await sleep(0);
   try {
-    // Try to reuse a stored handle first; if permission denied, show picker
-    let dirHandle = await getStoredDirHandle();
+    let dirHandle = await getStoredDirHandle(key);
     if (dirHandle) {
       const perm = await dirHandle.queryPermission({ mode: 'read' });
       if (perm !== 'granted') {
@@ -2465,32 +2628,46 @@ document.getElementById('auto-load-btn').addEventListener('click', async () => {
     }
     if (!dirHandle) {
       dirHandle = await window.showDirectoryPicker({ mode: 'read' });
-      await storeDirHandle(dirHandle);
+      await storeDirHandle(dirHandle, key);
     }
-    await loadFromDirHandle(dirHandle);
+    await load(dirHandle);
   } catch (e) {
     showLoading(false);
     if (e.name !== 'AbortError') fileStatus.textContent = `Error: ${e.message}`;
     else fileStatus.textContent = 'Folder selection cancelled';
   }
-});
+}
 
-// On page load, auto-reload from the stored folder handle if permission is already granted
+document.getElementById('greenbutton-btn').addEventListener('click', () =>
+  pickAndLoadFolder({ key: DIR_ENERGY, load: loadGreenButtonDir,
+                      waiting: 'Waiting for Green Button folder…' }));
+
+document.getElementById('auto-load-btn').addEventListener('click', () =>
+  pickAndLoadFolder({ key: DIR_WEATHER, load: loadFromDirHandle,
+                      waiting: 'Waiting for weather folder…' }));
+
+// On page load, restore whichever folders are still permitted. Weather goes
+// first so the chart has its axis before the utility data joins it, but either
+// can arrive alone.
 (async () => {
   if (!window.showDirectoryPicker) return;
-  const dirHandle = await getStoredDirHandle();
-  if (!dirHandle) return;
-  const perm = await dirHandle.queryPermission({ mode: 'read' });
-  if (perm === 'granted') {
-    showLoading(true, 'Reloading from saved folder…');
-    await sleep(0);
-    try { await loadFromDirHandle(dirHandle); }
-    catch { showLoading(false); }
-  } else {
-    // Permission needs re-grant — update button to signal this
-    const btn = document.getElementById('auto-load-btn');
-    btn.textContent = '📂 Reload Folder';
-    btn.title = 'Click to re-open your previously selected CSV folder';
+  for (const [key, load, id, label] of [
+    [DIR_WEATHER, loadFromDirHandle,  'auto-load-btn',   '📂 Weather Data'],
+    [DIR_ENERGY,  loadGreenButtonDir, 'greenbutton-btn', '⚡ Green Button Data'],
+  ]) {
+    const dirHandle = await getStoredDirHandle(key);
+    if (!dirHandle) continue;
+    const perm = await dirHandle.queryPermission({ mode: 'read' });
+    if (perm === 'granted') {
+      showLoading(true, `Reloading ${label.slice(2)}…`);
+      await sleep(0);
+      try { await load(dirHandle); } catch { showLoading(false); }
+    } else {
+      // Permission needs re-granting — say so on the button itself
+      const btn = document.getElementById(id);
+      btn.textContent = label.replace(/^(\S+) /, '$1 Reload ');
+      btn.title = 'Click to re-open your previously selected folder';
+    }
   }
 })();
 
