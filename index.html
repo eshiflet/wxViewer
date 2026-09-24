@@ -1788,6 +1788,16 @@ function renderChart() {
       // A null is a reading the meter or station never recorded, so the line
       // breaks there rather than bridging across the outage.
       connectgaps: false,
+      // Unified hover groups points by x, and sources of different cadence do
+      // not share one: with a fifteen-minute meter reading among five-minute
+      // station readings, most hovered positions have no meter point at that
+      // exact time. Left to itself Plotly then prints that point's own date
+      // and value rather than just the value, so the row reads
+      // "(Sep 22, 2026, 12:30, 0.069)". Asking for the value explicitly keeps
+      // every row to the number it is there to show. No <extra></extra>: that
+      // suppresses the series name too, which would leave a column of
+      // unlabelled figures.
+      hovertemplate: '%{y}',
       ...(onRight ? { yaxis: 'y2' } : {}),
     });
 
