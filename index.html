@@ -1213,6 +1213,19 @@ document.getElementById('sample-data-btn').addEventListener('click', async () =>
     rows.sort((a, b) => a.ts - b.ts);
     weatherRows = rows; weatherCols = headers;
     datasetSources.weather = 'Sample data';
+
+    // Same seven days from the meter, so the sample shows both sources
+    // together the way a real dataset would.
+    const gbRes = await fetch('sample-greenbutton.xml');
+    if (gbRes.ok) {
+      const { rows: gbRows } = parseGreenButton(await gbRes.text());
+      if (gbRows.length) {
+        energyRows = gbRows.sort((a, b) => a.ts - b.ts);
+        energyCols = [GB_ENERGY_COL, ...(GB_INCLUDE_COST && energyRows.some(r => GB_COST_COL in r) ? [GB_COST_COL] : [])];
+        datasetSources.energy = 'Sample data';
+      }
+    }
+
     fileStatus.textContent = '';
     rebuildDataset();
   } catch (e) {
@@ -2657,16 +2670,14 @@ async function loadGreenButtonDir(dirHandle) {
   }
 
   const byTs = new Map();
-  let seen = 0, skipped = 0, wrongUnits = 0;
+  let wrongUnits = 0;
   for (const e of entries) {
     showLoading(true, `Reading ${e.name}…`);
     await sleep(0);
     const { rows, uom } = parseGreenButton(await (await e.getFile()).text());
     if (!rows.length && uom !== null && uom !== ESPI_WATT_HOURS) { wrongUnits++; continue; }
-    seen += rows.length;
     for (const r of rows) byTs.set(+r.ts, r);
   }
-  skipped = seen - byTs.size;
 
   if (!byTs.size) {
     showLoading(false);
@@ -2680,9 +2691,10 @@ async function loadGreenButtonDir(dirHandle) {
   energyCols = [GB_ENERGY_COL, ...(GB_INCLUDE_COST && energyRows.some(r => GB_COST_COL in r) ? [GB_COST_COL] : [])];
   datasetSources.energy =
     `${entries.length} Green Button file${entries.length > 1 ? 's' : ''}`;
-  fileStatus.textContent = skipped
-    ? `${byTs.size.toLocaleString()} intervals · ${skipped.toLocaleString()} duplicate readings merged`
-    : '';
+  // Interval count and duplicate-merge count used to print here, next to the
+  // button — now redundant with the Green Button segment of the header's
+  // dataset line, which reads the same counts off energyRows.
+  fileStatus.textContent = '';
   rebuildDataset();
 }
 
