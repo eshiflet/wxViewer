@@ -94,6 +94,13 @@
     gap: 5px;
   }
 
+  .shift-btn {
+    background: none; border: none; color: var(--muted);
+    font-size: 14px; line-height: 1; padding: 2px 5px; margin-right: -6px;
+    border-radius: 4px; cursor: pointer; flex-shrink: 0;
+  }
+  .shift-btn:hover { color: var(--text); background: var(--surface); }
+
   .file-label {
     display: inline-flex;
     align-items: center;
@@ -592,8 +599,10 @@
   <span id="file-status">No files loaded</span>
 
   <div class="divider"></div>
+  <button class="shift-btn" id="shift-back" title="Shift window back by its own length" aria-label="Shift window back">&lt;</button>
   <label>From</label>
   <input type="datetime-local" id="date-from">
+  <button class="shift-btn" id="shift-fwd" title="Shift window forward by its own length" aria-label="Shift window forward">&gt;</button>
   <label>To</label>
   <input type="datetime-local" id="date-to">
   <button class="btn" id="apply-btn">Apply</button>
@@ -1504,6 +1513,27 @@ allBtn.addEventListener('click', () => {
   renderChart();
   if (analysisPanel.classList.contains('visible')) renderActiveView();
 });
+
+// Shift the window by its own length. Clamped to the data so the window keeps
+// its size when it hits either end.
+function shiftWindow(dir) {
+  if (!allRows.length || !dateFrom || !dateTo) return;
+  const first = +allRows[0].ts, last = +allRows[allRows.length - 1].ts;
+  const len = +dateTo - +dateFrom;
+  if (!(len > 0) || len >= last - first) return;
+  let from = +dateFrom + dir * len;
+  from = Math.min(Math.max(from, first), last - len);
+  if (from === +dateFrom) return;
+  chartView = null;
+  dateFrom = new Date(from);
+  dateTo   = new Date(from + len);
+  dateFromEl.value = toDateTimeInput(dateFrom);
+  dateToEl.value   = toDateTimeInput(dateTo);
+  renderChart();
+  if (analysisPanel.classList.contains('visible')) renderActiveView();
+}
+document.getElementById('shift-back').addEventListener('click', () => shiftWindow(-1));
+document.getElementById('shift-fwd').addEventListener('click', () => shiftWindow(1));
 
 // Quick-range buttons: 1d / 7d / 30d / 90d
 document.querySelectorAll('[data-days]').forEach(btn => {
