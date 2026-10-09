@@ -619,8 +619,6 @@
     </svg>
     Export CSV
   </button>
-
-  <div class="divider"></div>
   <button class="btn secondary icon-btn" id="analyze-btn">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -628,7 +626,6 @@
     </svg>
     Analyze
   </button>
-  <div class="divider"></div>
   <button class="btn secondary icon-btn" id="anomaly-btn">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
       <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
@@ -636,6 +633,12 @@
     </svg>
     Anomalies
     <span id="anomaly-count"></span>
+  </button>
+  <button class="btn secondary icon-btn" id="overlay-btn" title="Overlay the same window from one year earlier (dotted)">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M3 17l5-6 4 3 5-8 4 5"/><path d="M3 21l5-6 4 3 5-8 4 5" stroke-dasharray="1.5 2.5"/>
+    </svg>
+    Overlay
   </button>
 </div>
 
@@ -1064,6 +1067,7 @@ let checkedCols  = new Set();
 let dateFrom     = null;
 let dateTo       = null;
 let showAnomalies = false;
+let showOverlay   = false;
 
 // ── DOM ─────────────────────────────────────────────────────────────────
 const fileInput      = document.getElementById('file-input');
@@ -1580,6 +1584,33 @@ anomalyBtn.addEventListener('click', () => {
   renderChart();
 });
 
+// ── Year-ago overlay ─────────────────────────────────────────────────────
+const overlayBtn = document.getElementById('overlay-btn');
+overlayBtn.addEventListener('click', () => {
+  showOverlay = !showOverlay;
+  overlayBtn.classList.toggle('active', showOverlay);
+  if (!showOverlay) fileStatus.textContent = '';
+  renderChart();
+});
+
+const yearShift = (ms, years) => { const d = new Date(ms); d.setFullYear(d.getFullYear() + years); return d; };
+
+// Readings from allRows in [t0, t1], with ignore periods applied by their own
+// (real) timestamps. Rows are copied only where a rule hides a value.
+function overlayRows(t0, t1) {
+  const out = [];
+  for (let i = lowerBound(allRows, t0); i < allRows.length; i++) {
+    const r = allRows[i];
+    if (+r.ts > t1) break;
+    let m = null;
+    for (const [col, rule] of ignoreRules) {
+      if (r[col] != null && isIgnored(+r.ts, rule)) { if (!m) m = { ...r }; delete m[col]; }
+    }
+    out.push(m || r);
+  }
+  return out;
+}
+
 // ── Anomaly detection (Tukey IQR) ────────────────────────────────────────
 function detectAnomalies(values) {
   const sorted = [...values].filter(v => v != null).sort((a, b) => a - b);
@@ -1886,6 +1917,7 @@ function renderChart() {
     traces.push({
       x: drawn.x, y: drawn.y,
       name: displayName(col),
+      legendgroup: col,
       type: 'scattergl',
       mode: 'lines',
       line: { color, width: 1.5 },
@@ -1929,6 +1961,35 @@ function renderChart() {
       }
     }
   });
+
+  // ── Year-ago overlay ───────────────────────────────────────────────
+  // Same series, same colour, dotted, drawn over the same window one calendar
+  // year earlier. Points are shifted forward a year so they share the x-axis;
+  // legendgroup ties each to its current-year trace so a legend click hides both.
+  if (showOverlay) {
+    const prevFull = [+yearShift(full[0], -1), +yearShift(full[1], -1)];
+    const prevView = [+yearShift(view[0], -1), +yearShift(view[1], -1)];
+    const prev = overlayRows(prevFull[0], prevFull[1]);
+    if (!prev.length) {
+      fileStatus.textContent = 'No data from one year earlier for this window';
+    } else {
+      fileStatus.textContent = '';
+      columns.forEach((col, i) => {
+        if (!checkedCols.has(col)) return;
+        const drawn = decimateForView(prev, col, prevView, prevFull, cachedSeriesGapMs(filtered, col), bins);
+        traces.push({
+          x: drawn.x.map(d => d == null ? d : yearShift(+d, 1)), y: drawn.y,
+          name: displayName(col) + ' (1y ago)',
+          legendgroup: col,
+          type: 'scattergl', mode: 'lines',
+          line: { color: seriesColor(col, i), width: 1.5, dash: 'dot' },
+          connectgaps: false,
+          hovertemplate: '%{y}',
+          ...(useRight && usesRightAxis(col) ? { yaxis: 'y2' } : {}),
+        });
+      });
+    }
+  }
 
   // Update anomaly badge
   if (showAnomalies) {
