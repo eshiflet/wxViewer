@@ -4,7 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>wxViewer</title>
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"
+        integrity="sha384-cCVCZkAjYNxaYKbM8lsArLznDF/SvMFr1jcZrvOpSTCa0W40ZAdLzHCEulnUa5i7"
+        crossorigin="anonymous"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -147,6 +149,34 @@
   .load-card-state { font-size: 11px; color: var(--muted); }
   .load-card-state:empty { display: none; }
   .load-card-state.attention { color: #f59e0b; }
+  [hidden] { display: none !important; }   /* a class's display must not override the hidden attribute */
+  .awn-modal { width: min(580px, 94vw); max-height: 90vh; }
+  .awn-body { display: flex; flex-direction: column; gap: 10px; padding: 2px 16px 12px; overflow-y: auto; }
+  .awn-intro { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .awn-status { font-size: 12px; }
+  #awn-keys-form { display: flex; flex-direction: column; gap: 8px; }
+  #awn-keys-form label, .awn-station { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); }
+  #awn-keys-form input, .awn-station select {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); padding: 6px 9px; font-size: 12px; font-family: inherit;
+  }
+  .awn-form-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .awn-hint { font-size: 11px; color: var(--muted); }
+  .awn-hint a { color: var(--accent); }
+  .awn-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .awn-actions .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .awn-log {
+    min-height: 70px; max-height: 190px; overflow-y: auto; padding: 8px 10px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+  }
+  .awn-log:empty { display: none; }
+  .awn-log .ok { color: #4ade80; } .awn-log .warn { color: #f59e0b; } .awn-log .err { color: #f87171; }
+  .awn-foot { padding: 10px 16px 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+  .awn-foot[hidden], [hidden].awn-note { display: none; }
+  .awn-keys-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .awn-keys-actions[hidden] { display: none; }
+  .awn-note { font-size: 11px; color: var(--muted); line-height: 1.5; }
   .load-foot {
     padding: 10px 16px 14px; border-top: 1px solid var(--border);
     font-size: 11px; color: var(--muted);
@@ -628,6 +658,12 @@
     Load Data
     <span class="attn-dot" id="load-attn" hidden title="A remembered folder needs attention"></span>
   </button>
+  <button class="btn secondary icon-btn" id="api-update-btn" aria-haspopup="dialog" title="Fetch newer readings from the Ambient Weather API">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/>
+    </svg>
+    API Update
+  </button>
   <input type="file" id="file-input" accept=".csv" multiple>
   <span id="file-status">No files loaded</span>
 
@@ -845,6 +881,40 @@
     <label>Custom <input type="color" id="color-custom"></label>
     <span class="spacer"></span>
     <button id="color-reset">Reset</button>
+  </div>
+</div>
+
+<div class="load-backdrop" id="awn-backdrop">
+  <div class="load-modal awn-modal" role="dialog" aria-modal="true" aria-labelledby="awn-title">
+    <div class="load-head">
+      <h3 id="awn-title">AWN API update</h3>
+      <button class="load-close" id="awn-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="awn-body">
+      <p class="awn-intro">Fetches readings newer than your data straight from Ambient Weather. The API holds only about 13 days of history, so run it at least weekly.</p>
+      <div id="awn-keys-status" class="awn-status"></div>
+      <div id="awn-keys-form" hidden>
+        <label>API key <input type="password" id="awn-key-api" autocomplete="off" spellcheck="false"></label>
+        <label>Application key <input type="password" id="awn-key-app" autocomplete="off" spellcheck="false"></label>
+        <div class="awn-form-row">
+          <button class="btn" id="awn-key-save-browser">Save in this browser</button>
+          <span class="awn-hint">Create both on your <a href="https://ambientweather.net" target="_blank" rel="noopener">Ambient Weather account</a> page.</span>
+        </div>
+      </div>
+      <label class="awn-station" id="awn-device-row" hidden>Station <select id="awn-device"></select></label>
+      <div class="awn-actions">
+        <button class="btn" id="awn-update-btn" disabled>Update now</button>
+        <button class="btn secondary" id="awn-save-btn" disabled>Save new readings to Weather folder</button>
+      </div>
+      <div id="awn-log" class="awn-log" aria-live="polite"></div>
+    </div>
+    <div class="awn-foot" id="awn-foot" hidden>
+      <div class="awn-keys-actions">
+        <button class="btn secondary" id="awn-keys-file-btn" hidden>Save keys to file</button>
+        <button class="btn secondary" id="awn-keys-forget-btn" hidden>Forget keys</button>
+      </div>
+      <div class="awn-note" id="awn-keys-note" hidden></div>
+    </div>
   </div>
 </div>
 
@@ -1233,6 +1303,7 @@ function mergeColumns(existing, headers) {
 // timestamp into `joined`, so loading one never disturbs the other and the
 // order they arrive in does not matter.
 let weatherTable = null, weatherCols = [];
+let weatherDirHandle = null;      // the Weather folder, when the data came from one
 let energyTable  = null, energyCols  = [];
 let columns      = [];
 let checkedCols  = new Set();
@@ -1297,7 +1368,12 @@ function updateDatasetLabel() {
 // of its own, which is what lets utility data from before the station existed
 // sit on the same axis. The sources themselves are never altered, so reloading
 // one cannot leave the other's values behind.
-function rebuildDataset() {
+function rebuildDataset(opts = {}) {
+  // An update that only adds readings should not throw away what the user was
+  // looking at: keep the window (following the newest data if that is where
+  // it was) and the selected series.
+  const prev = opts.keepView && joined.n && dateFrom && dateTo
+    ? { from: dateFrom, to: dateTo, first: joined.ts[0], last: joined.ts[joined.n - 1] } : null;
   joined = buildJoined();
   columns = [...weatherCols, ...energyCols.filter(c => !weatherCols.includes(c))];
 
@@ -1305,11 +1381,16 @@ function rebuildDataset() {
   if (joined.n) {
     const first = new Date(joined.ts[0]), last = new Date(joined.ts[joined.n - 1]);
     dateFrom = first; dateTo = last;
-    dateFromEl.value = toDateTimeInput(first);
-    dateToEl.value   = toDateTimeInput(last);
+    if (prev) {
+      const atStart = +prev.from <= prev.first, atEnd = +prev.to >= prev.last;
+      dateTo = atEnd ? last : prev.to;
+      dateFrom = atStart ? first : atEnd ? new Date(Math.max(+first, +last - (+prev.to - +prev.from))) : prev.from;
+    }
+    dateFromEl.value = toDateTimeInput(dateFrom);
+    dateToEl.value   = toDateTimeInput(dateTo);
   }
   updateDatasetLabel();
-  buildSidebar();
+  buildSidebar(!!prev);
   showLoading(false);
   renderChart();
   if (analysisPanel.classList.contains('visible')) renderActiveView();
@@ -1431,7 +1512,7 @@ document.getElementById('sample-data-btn').addEventListener('click', async () =>
 });
 
 // ── Sidebar ─────────────────────────────────────────────────────────────
-function buildSidebar() {
+function buildSidebar(keepSelection = false) {
   ensurePalette(columns.length);
   // A new dataset can add or drop channels, so refresh the sensor pickers if
   // the configuration section happens to be open.
@@ -1441,6 +1522,7 @@ function buildSidebar() {
   updateSeasonSummary(loadSeasonConfig());
   seriesList.innerHTML = '';
   sidebarActions.style.display = 'flex';
+  const kept = keepSelection ? new Set([...checkedCols].filter(c => columns.includes(c))) : null;
   checkedCols.clear();
 
   // Temperature channels start selected. A dataset with none — utility data on
@@ -1451,7 +1533,7 @@ function buildSidebar() {
     : columns.find(columnHasData);
 
   columns.forEach((col, i) => {
-    if (anyTemp ? DEFAULT_SELECTED_RE.test(col) : col === firstNumeric) checkedCols.add(col);
+    if (kept ? kept.has(col) : (anyTemp ? DEFAULT_SELECTED_RE.test(col) : col === firstNumeric)) checkedCols.add(col);
 
     const item = document.createElement('label');
     item.className = 'series-item';
@@ -2929,6 +3011,7 @@ async function storeDirHandle(handle, key = DIR_WEATHER) {
 }
 
 async function loadFromDirHandle(dirHandle) {
+  weatherDirHandle = dirHandle;
   const parts = []; let cols = []; let count = 0;
   for await (const entry of dirHandle.values()) {
     if (entry.kind !== 'file' || !entry.name.toLowerCase().endsWith('.csv')) continue;
@@ -3753,6 +3836,550 @@ function toDateTimeInput(d) {
 function fmtDate(d) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
+</script>
+<script>
+// ══ AWN API update ═══════════════════════════════════════════════════════════
+// Pull readings newer than the loaded data straight from Ambient Weather's API
+// (it allows browser calls), merge them into the dataset, and — as a separate,
+// explicit step — write them into the Weather folder in the dashboard's own
+// monthly-CSV format.
+//
+// Nothing here runs unless the user clicks API Update. The keys never leave the
+// browser except in requests to api.ambientweather.net, are never put in a URL
+// that is shown or logged, and live in one of two places the user picks: this
+// browser's storage, or a `.awn_keys` file in their Weather folder.
+
+const AWN_BASE       = 'https://rt.ambientweather.net/v1';
+const AWN_KEYS_FILE  = '.awn_keys';
+const AWN_LS_KEYS    = 'wxviewer-awn-keys';       // { api, app }
+const AWN_LS_DEVICE  = 'wxviewer-awn-device';     // chosen MAC
+const AWN_LS_MAP     = 'wxviewer-awn-map';        // { MAC12: { column: [field, decimals] } }
+const AWN_FILE_RE    = /^AWN-([0-9A-F]{12})-(\d{8})-(\d{8})\.csv$/;
+const AWN_OVERLAP_MS = 22 * 3600 * 1000;          // re-read readings we already have, to learn column names from; inside one 288-record batch (24 h)
+
+class AwnError extends Error {}
+
+// ── exact rounding, as Python's round() does it ──────────────────────────────
+// The dashboard's files were reproduced by Python's round(); JavaScript's
+// toFixed() breaks exact ties upward instead of to the even digit (68.25 -> 68.3
+// where Python gives 68.2). This works from the exact decimal expansion of the
+// double so the two agree on every value, ties included.
+function awnRound(x, dec) {
+  if (x === null || x === undefined || x !== x) return '';
+  const neg = x < 0;
+  const [ip, fp = ''] = Math.abs(x).toFixed(Math.min(100, dec + 60)).split('.');
+  const keep = fp.slice(0, dec), rest = fp.slice(dec);
+  let up = false;
+  if (rest[0] > '5') up = true;
+  else if (rest[0] === '5') {
+    if (/[1-9]/.test(rest.slice(1))) up = true;
+    else up = (Number((ip + keep).slice(-1)) % 2) === 1;          // a true tie goes to the even digit
+  }
+  let digits = (ip + keep).split('');
+  if (up) {
+    let i = digits.length - 1;
+    while (i >= 0) { if (digits[i] === '9') { digits[i] = '0'; i--; } else { digits[i] = String(+digits[i] + 1); break; } }
+    if (i < 0) digits.unshift('1');
+  }
+  const all = digits.join('');
+  let s = dec ? all.slice(0, all.length - dec) + '.' + all.slice(all.length - dec) : all;
+  if (s.includes('.')) s = s.replace(/0+$/, '').replace(/\.$/, '');
+  s = s.replace(/^0+(?=\d)/, '');
+  return (neg && /[1-9]/.test(s)) ? '-' + s : s;
+}
+const awnRoundNum = (x, dec) => { const s = awnRound(x, dec); return s === '' ? NaN : parseFloat(s); };
+
+// ── local time with its UTC offset, the way the CSV writes it ────────────────
+const awnDtf = new Map();
+function awnLocal(ms, tz) {
+  let f = awnDtf.get(tz);
+  if (!f) awnDtf.set(tz, f = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'longOffset' }));
+  const p = {};
+  for (const x of f.formatToParts(ms)) p[x.type] = x.value;
+  let off = (p.timeZoneName || 'GMT').replace('GMT', '');
+  if (off === '') off = '+00:00';
+  const h = p.hour === '24' ? '00' : p.hour;
+  return { date: `${p.year}-${p.month}-${p.day}T${h}:${p.minute}:${p.second}${off}`,
+           simple: `${p.year}-${p.month}-${p.day} ${h}:${p.minute}:${p.second}`,
+           month: `${p.year}${p.month}`, day: `${p.year}${p.month}${p.day}`, off };
+}
+const awnBrowserTz = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+// ── which API field is which CSV column ──────────────────────────────────────
+// Names that are the same for every AWN station.
+const AWN_FIXED = {
+  'Outdoor Temperature (°F)': ['tempf', 1],        'Feels Like (°F)':           ['feelsLike', 1],
+  'Dew Point (°F)':           ['dewPoint', 1],     'Humidity (%)':              ['humidity', 0],
+  'Wind Speed (mph)':         ['windspeedmph', 1], 'Wind Gust (mph)':           ['windgustmph', 1],
+  'Max Daily Gust (mph)':     ['maxdailygust', 1], 'Wind Direction (°)':        ['winddir', 0],
+  'Rain Rate (in/hr)':        ['hourlyrainin', 2], 'Event Rain (in)':           ['eventrainin', 2],
+  'Daily Rain (in)':          ['dailyrainin', 2],  'Weekly Rain (in)':          ['weeklyrainin', 2],
+  'Monthly Rain (in)':        ['monthlyrainin', 2],'Total Rain (in)':           ['totalrainin', 2],
+  'Relative Pressure (inHg)': ['baromrelin', 2],   'Absolute Pressure (inHg)':  ['baromabsin', 2],
+  'Ultra-Violet Radiation Index': ['uv', 0],       'Solar Radiation (W/m^2)':   ['solarradiation', 1],
+  'Outdoor Battery':          ['battout', 0],
+};
+// Names the owner chose in the dashboard ("Basement", "Kitchen"…), one set per
+// remote sensor. The API only knows them as a number, so which sensor a name is
+// gets learned from the data.
+const AWN_GROUP_METRICS = [
+  { re: /^(.+) Temperature \(°F\)$/,                  kind: 'temp',     dec: 1, label: g => `${g} Temperature (°F)` },
+  { re: /^(.+) Humidity \(%\)$/,                      kind: 'humidity', dec: 0, label: g => `${g} Humidity (%)` },
+  { re: /^(.+) (?:Heat Index|Feels Like) \(°F\)$/,    kind: 'feels',    dec: 1, label: g => `${g} Feels Like (°F)` },
+  { re: /^(.+) Dew Point \(°F\)$/,                    kind: 'dew',      dec: 1, label: g => `${g} Dew Point (°F)` },
+  { re: /^(.+) Battery$/,                             kind: 'battery',  dec: 0, label: g => `${g} Battery` },
+];
+const AWN_SUFFIXES = ['in', ...Array.from({ length: 10 }, (_, i) => String(i + 1))];   // '' (outdoor) is the fixed set
+function awnField(kind, s) {
+  switch (kind) {
+    case 'temp':     return s === '' ? 'tempf'     : s === 'in' ? 'tempinf'   : `temp${s}f`;
+    case 'humidity': return s === '' ? 'humidity'  : s === 'in' ? 'humidityin': `humidity${s}`;
+    case 'dew':      return `dewPoint${s}`;
+    case 'feels':    return `feelsLike${s}`;
+    case 'battery':  return s === '' ? 'battout'   : s === 'in' ? 'battin'    : `batt${s}`;
+  }
+}
+
+// Learn the mapping from readings we already hold: where a loaded column and an
+// API field agree (within one last digit, on ≥90% of shared timestamps) they are
+// the same series. Columns that do not validate are left out, never guessed.
+function awnLearnMapping(table, recs) {
+  const byTs = new Map(recs.map(r => [r.dateutc, r]));
+  const at = [], rr = [];
+  for (let i = 0; i < table.n; i++) { const r = byTs.get(table.ts[i]); if (r) { at.push(i); rr.push(r); } }
+  const agree = (col, field, dec) => {
+    const a = table.cols.get(col); let ok = 0, exact = 0, tot = 0;
+    for (let k = 0; k < at.length; k++) {
+      const v = a[at[k]], x = rr[k][field];
+      if (v !== v || x == null) continue;
+      tot++;
+      const d = Math.abs(awnRoundNum(x, dec) - v);
+      if (d <= 1e-9) exact++;
+      if (d <= Math.pow(10, -dec) + 1e-9) ok++;
+    }
+    return { tot, ok: tot ? ok / tot : 0, exact: tot ? exact / tot : 0 };
+  };
+
+  const groups = new Map();                       // name -> { kind -> column }
+  for (const col of table.cols.keys()) {
+    if (AWN_FIXED[col]) continue;
+    for (const m of AWN_GROUP_METRICS) {
+      const hit = m.re.exec(col);
+      if (hit) { (groups.get(hit[1]) || groups.set(hit[1], {}).get(hit[1]))[m.kind] = { col, m }; break; }
+    }
+  }
+  const suffixOf = new Map();                     // group -> sensor suffix
+  const ambiguous = [];
+  for (const [g, cols] of groups) {
+    const probe = cols.temp || cols.humidity;     // the series that tells sensors apart
+    if (!probe) continue;
+    const scored = AWN_SUFFIXES.map(s => ({ s, ...agree(probe.col, awnField(probe.m.kind, s), probe.m.dec) }))
+                               .filter(x => x.tot >= 12 && x.ok >= 0.9).sort((a, b) => b.ok - a.ok);
+    if (!scored.length) continue;
+    suffixOf.set(g, scored[0].s);
+    if (scored[1] && Math.abs(scored[1].ok - scored[0].ok) < 0.005) ambiguous.push(g);
+  }
+
+  const map = new Map(), unvalidated = [];
+  let exact = 0, count = 0;
+  for (const col of table.cols.keys()) {
+    let field = null, dec = 0;
+    if (AWN_FIXED[col]) [field, dec] = AWN_FIXED[col];
+    else for (const m of AWN_GROUP_METRICS) {
+      const hit = m.re.exec(col);
+      if (hit) { if (suffixOf.has(hit[1])) { field = awnField(m.kind, suffixOf.get(hit[1])); dec = m.dec; } break; }
+    }
+    if (!field) { unvalidated.push(col); continue; }
+    const r = agree(col, field, dec);
+    if (r.tot >= 12 && r.ok >= 0.9) { map.set(col, { field, dec }); exact += r.exact; count++; }
+    else unvalidated.push(col);
+  }
+  return { map, overlap: at.length, unvalidated, ambiguous, exactRate: count ? exact / count : 0 };
+}
+
+// Without existing data to learn from: the names every station shares, plus
+// generic ones for whichever remote sensors the records carry.
+function awnDefaultMapping(recs) {
+  const have = new Set(); for (const r of recs.slice(-50)) for (const k of Object.keys(r)) have.add(k);
+  const map = new Map();
+  for (const [col, [field, dec]] of Object.entries(AWN_FIXED)) if (have.has(field)) map.set(col, { field, dec });
+  for (const s of AWN_SUFFIXES) {
+    const g = s === 'in' ? 'Indoor' : `Sensor ${s}`;
+    for (const m of AWN_GROUP_METRICS) { const f = awnField(m.kind, s); if (have.has(f)) map.set(m.label(g), { field: f, dec: m.dec }); }
+  }
+  return map;
+}
+
+function awnSavedMapping(mac12) {
+  try { const all = JSON.parse(localStorage.getItem(AWN_LS_MAP) || '{}'); const m = all[mac12];
+        return m ? new Map(Object.entries(m).map(([c, [field, dec]]) => [c, { field, dec }])) : null; } catch { return null; }
+}
+function awnSaveMapping(mac12, map) {
+  try { const all = JSON.parse(localStorage.getItem(AWN_LS_MAP) || '{}');
+        all[mac12] = Object.fromEntries([...map].map(([c, v]) => [c, [v.field, v.dec]]));
+        localStorage.setItem(AWN_LS_MAP, JSON.stringify(all)); } catch { /* storage unavailable */ }
+}
+
+// Records -> a table part, with each value rounded exactly as a saved file would hold it.
+function awnPart(recs, map) {
+  const ts = Float64Array.from(recs, r => r.dateutc);
+  const cols = new Map();
+  for (const [col, { field, dec }] of map) cols.set(col, Float64Array.from(recs, r => awnRoundNum(r[field], dec)));
+  return { ts, cols };
+}
+
+// ── the API ──────────────────────────────────────────────────────────────────
+let awnLastCall = 0;
+async function awnGet(keys, path, params = {}) {
+  const q = new URLSearchParams({ apiKey: keys.api, applicationKey: keys.app, ...params });
+  let lastStatus = 0;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const wait = 1100 - (Date.now() - awnLastCall);          // 1 request/second per key
+    if (wait > 0) await sleep(wait);
+    awnLastCall = Date.now();
+    let res;
+    try { res = await fetch(`${AWN_BASE}${path}?${q}`, { cache: 'no-store' }); }
+    catch { throw new AwnError('Could not reach Ambient Weather. Check your connection and try again.'); }
+    if (res.ok) return res.json();
+    if (res.status === 401) throw new AwnError('Ambient Weather rejected the keys. Check them, or enter them again.');
+    lastStatus = res.status;
+    if (res.status === 429 || res.status >= 500) { await sleep(2000 * 2 ** attempt); continue; }
+    throw new AwnError(`Ambient Weather returned an error (${res.status}).`);
+  }
+  throw new AwnError(lastStatus === 429 ? 'Ambient Weather is rate-limiting requests. Try again in a minute.'
+                                        : `Ambient Weather is having trouble right now (${lastStatus}). Try again later.`);
+}
+
+// Everything newer than `after` (ms), oldest first. The API returns at most 288
+// records newest-first, so walk backward until a batch reaches `after` or the
+// history runs out (it keeps only ~13 days).
+async function awnFetchSince(keys, mac, after, progress) {
+  const got = new Map(); let end = null;
+  for (let i = 0; i < 200; i++) {
+    const params = { limit: 288 }; if (end !== null) params.endDate = end;
+    const batch = await awnGet(keys, `/devices/${encodeURIComponent(mac)}`, params);
+    if (!Array.isArray(batch) || !batch.length) break;
+    for (const r of batch) got.set(r.dateutc, r);
+    const oldest = Math.min(...batch.map(r => r.dateutc));
+    if (progress) progress(i + 1, oldest);
+    if (oldest <= after || batch.length < 288) break;
+    end = oldest - 1;
+  }
+  return [...got.values()].filter(r => r.dateutc > after).sort((a, b) => a.dateutc - b.dateutc);
+}
+
+// ── keys: this browser, or a file in the Weather folder ──────────────────────
+function awnParseKeys(text) {
+  const out = { api: null, app: null };
+  for (const line of text.split('\n')) {
+    const p = line.trim().split(/\s+/);
+    if (p.length >= 3 && !p[0].startsWith('#')) {
+      if (p[0] === 'API_Key' && !out.api) out.api = p[2];
+      if (p[0] === 'App_Key' && !out.app) out.app = p[2];
+    }
+  }
+  return out;
+}
+async function awnFolder() { return weatherDirHandle || (await getStoredDirHandle(DIR_WEATHER)); }
+
+async function awnReadKeyFile(handle, interactive) {
+  try {
+    let perm = await handle.queryPermission({ mode: 'read' });
+    if (perm !== 'granted' && interactive) perm = await handle.requestPermission({ mode: 'read' });
+    if (perm !== 'granted') return null;
+    const f = await (await handle.getFileHandle(AWN_KEYS_FILE)).getFile();
+    const k = awnParseKeys(await f.text());
+    return k.api && k.app ? k : null;
+  } catch { return null; }
+}
+async function awnResolveKeys(interactive) {
+  const folder = await awnFolder();
+  if (folder) { const k = await awnReadKeyFile(folder, interactive); if (k) return { ...k, source: 'file' }; }
+  try { const k = JSON.parse(localStorage.getItem(AWN_LS_KEYS) || 'null'); if (k && k.api && k.app) return { ...k, source: 'browser' }; } catch { /* none */ }
+  return null;
+}
+const awnMask = v => '••••' + String(v).slice(-4);
+
+// Write the two key lines into .awn_keys, leaving any other lines in it alone.
+async function awnWriteKeyFile(handle, api, app) {
+  let text = '';
+  try { text = await (await (await handle.getFileHandle(AWN_KEYS_FILE)).getFile()).text(); } catch { /* new file */ }
+  const lines = text ? text.split('\n') : [];
+  let didApi = false, didApp = false;
+  const out = lines.map(l => {
+    const t = l.trim().split(/\s+/);
+    if (t[0] === 'API_Key' && !didApi) { didApi = true; return `API_Key ${t[1] || 'wxViewer'} ${api}`; }   // keep the label already there
+    if (t[0] === 'App_Key' && !didApp) { didApp = true; return `App_Key ${t[1] || 'wxViewer'} ${app}`; }
+    return l;
+  });
+  while (out.length && out[out.length - 1] === '') out.pop();
+  if (!didApi) out.push(`API_Key wxViewer ${api}`);
+  if (!didApp) out.push(`App_Key wxViewer ${app}`);
+  const w = await (await handle.getFileHandle(AWN_KEYS_FILE, { create: true })).createWritable();
+  await w.write(out.join('\n') + '\n'); await w.close();
+  const back = awnParseKeys(await (await (await handle.getFileHandle(AWN_KEYS_FILE)).getFile()).text());
+  return back.api === api && back.app === app;
+}
+async function awnRemoveKeyFile(handle) {
+  let text;
+  try { text = await (await (await handle.getFileHandle(AWN_KEYS_FILE)).getFile()).text(); } catch { return; }
+  const keep = text.split('\n').filter(l => !/^\s*(API_Key|App_Key)\s/.test(l));
+  if (keep.every(l => !l.trim() || l.trim().startsWith('#'))) { await handle.removeEntry(AWN_KEYS_FILE); return; }
+  const w = await (await handle.getFileHandle(AWN_KEYS_FILE)).createWritable();
+  await w.write(keep.join('\n')); await w.close();
+}
+
+// ── writing records into the Weather folder ──────────────────────────────────
+function awnSplitCsvLine(line) {
+  const out = []; let cur = '', q = false;
+  for (const c of line) { if (c === '"') q = !q; else if (c === ',' && !q) { out.push(cur); cur = ''; } else cur += c; }
+  out.push(cur); return out;
+}
+function awnRowText(rec, header, map, tz) {
+  const t = awnLocal(rec.dateutc, tz);
+  return header.map(col => {
+    if (col === 'Date') return t.date;
+    if (col === 'Simple Date') return t.simple;
+    const m = map.get(col);
+    return m ? awnRound(rec[m.field], m.dec) : '';
+  }).join(',');
+}
+
+// Put `recs` (oldest first) into month files in `dir`, exactly as the dashboard's
+// export lays them out: newest row first, one file per local month, the name
+// carrying the first of the month and the last day with data. Existing rows are
+// kept byte for byte.
+async function awnWriteRecords(dir, mac12, recs, map) {
+  const files = [];
+  for await (const e of dir.values()) {
+    const m = e.kind === 'file' && AWN_FILE_RE.exec(e.name);
+    if (m && m[1] === mac12) files.push({ name: e.name, start: m[2], end: m[3], handle: e });
+  }
+  if (!files.length) throw new AwnError(`There is no AWN-${mac12}-….csv file in that folder to continue.`);
+  files.sort((a, b) => a.start.localeCompare(b.start));
+  const latest = files[files.length - 1];
+  const read = async f => (await f.handle.getFile()).text();
+  const latestText = await read(latest);
+  const nl = latestText.indexOf('\n');
+  const headerLine = latestText.slice(0, nl), header = awnSplitCsvLine(headerLine);
+  const firstRow = latestText.slice(nl + 1).split('\n', 1)[0];
+  const lastTs = firstRow ? Date.parse(awnSplitCsvLine(firstRow)[0]) : null;
+
+  // The timestamps only mean the same thing if this browser's zone is the station's.
+  const tz = awnBrowserTz();
+  if (firstRow) {
+    const fileOff = awnSplitCsvLine(firstRow)[0].slice(-6);
+    if (awnLocal(lastTs, tz).off !== fileOff)
+      throw new AwnError(`Your files use UTC offset ${fileOff} but this browser is in ${tz}. Saving is refused so the times are not written wrong.`);
+  }
+  const fresh = recs.filter(r => lastTs === null || r.dateutc > lastTs);
+  if (!fresh.length) return [];
+
+  const byMonth = new Map();
+  for (const r of fresh) { const t = awnLocal(r.dateutc, tz); (byMonth.get(t.month) || byMonth.set(t.month, []).get(t.month)).push({ r, t }); }
+  const changes = [];
+  for (const [month, items] of [...byMonth].sort()) {
+    const start = month + '01', lastDay = items[items.length - 1].t.day;
+    const rows = items.map(({ r }) => awnRowText(r, header, map, tz)).reverse();
+    const existing = files.find(f => f.start === start);
+    let text, name, kind;
+    if (existing) {
+      const t = await read(existing); const body = t.slice(t.indexOf('\n') + 1);
+      text = headerLine + '\n' + rows.map(l => l + '\n').join('') + body;
+      name = `AWN-${mac12}-${start}-${existing.end > lastDay ? existing.end : lastDay}.csv`; kind = 'appended';
+    } else {
+      text = headerLine + '\n' + rows.join('\n');
+      name = `AWN-${mac12}-${start}-${lastDay}.csv`; kind = 'created';
+    }
+    const w = await (await dir.getFileHandle(name, { create: true })).createWritable();
+    await w.write(text); await w.close();
+    if (existing && existing.name !== name) await dir.removeEntry(existing.name);
+    changes.push({ kind, name, rows: rows.length, from: items[0].t.simple, to: items[items.length - 1].t.simple });
+  }
+  return changes;
+}
+
+// ── the dialog ───────────────────────────────────────────────────────────────
+const awn = { keys: null, device: null, devices: [], pending: null, busy: false, forgetArmed: false };
+const $a = id => document.getElementById(id);
+const awnBackdrop = $a('awn-backdrop');
+
+function awnLog(text, kind = '') {
+  const el = document.createElement('div');
+  if (kind) el.className = kind;
+  el.textContent = text;
+  $a('awn-log').appendChild(el);
+  $a('awn-log').scrollTop = 1e9;
+}
+function awnBusy(b) {
+  awn.busy = b;
+  $a('awn-update-btn').disabled = b || !awn.keys;
+  awnRenderSave();
+}
+function awnRenderSave() {
+  const p = awn.pending, n = p && p.table === weatherTable ? p.recs.length : 0;
+  const btn = $a('awn-save-btn');
+  btn.textContent = n ? `Save ${n.toLocaleString()} new readings to Weather folder` : 'Save new readings to Weather folder';
+  btn.disabled = awn.busy || !n;
+}
+async function awnRenderKeys() {
+  const k = awn.keys;
+  $a('awn-keys-status').textContent = !k ? 'No keys yet.'
+    : k.source === 'file' ? `Keys from ${AWN_KEYS_FILE} in your Weather folder (${awnMask(k.api)}).`
+    : `Keys stored in this browser (${awnMask(k.api)}).`;
+  $a('awn-keys-form').hidden = !!k;
+  $a('awn-update-btn').disabled = awn.busy || !k;
+  $a('awn-keys-file-btn').hidden = !k || k.source !== 'browser';
+  $a('awn-keys-forget-btn').hidden = !k;
+  $a('awn-keys-forget-btn').textContent = k && k.source === 'file' ? 'Remove keys from file' : 'Forget keys';
+  $a('awn-keys-note').hidden = !k;
+  $a('awn-foot').hidden = !k;
+  $a('awn-keys-note').textContent = k && k.source === 'file'
+    ? 'The keys file is plain text and takes your system’s default permissions, so anything that can read your Weather folder can read it.'
+    : 'Saving keys to a file is a convenience, not extra security: the file is plain text and takes your system’s default permissions, so anything that can read your Weather folder can read it. It does remove the keys from this browser.';
+  awnRenderSave();
+}
+
+async function openAwnDialog() {
+  awnBackdrop.classList.add('visible');
+  $a('awn-log').textContent = '';
+  awn.keys = await awnResolveKeys(true);
+  await awnRenderKeys();
+  if (awn.keys) awnUpdate(); else $a('awn-key-api').focus();
+}
+function closeAwnDialog() {
+  if (!awnBackdrop.classList.contains('visible')) return;
+  awnBackdrop.classList.remove('visible');
+  $a('api-update-btn').focus();
+}
+
+async function awnUpdate() {
+  if (awn.busy || !awn.keys) return;
+  awnBusy(true);
+  try {
+    awnLog('Contacting Ambient Weather…');
+    const devices = await awnGet(awn.keys, '/devices');
+    if (!Array.isArray(devices) || !devices.length) throw new AwnError('No weather station found on that account.');
+    awn.devices = devices;
+    const sel = $a('awn-device');
+    const table = weatherTable && weatherTable.n ? weatherTable : null;
+    // prefer the station whose files are loaded, then the one chosen before
+    const loadedMac = await awnLoadedMac12();
+    const remembered = localStorage.getItem(AWN_LS_DEVICE);
+    awn.device = devices.find(d => d.macAddress.replace(/:/g, '').toUpperCase() === loadedMac)
+              || devices.find(d => d.macAddress === remembered) || devices[0];
+    sel.innerHTML = '';
+    for (const d of devices) sel.add(new Option(`${(d.info && d.info.name) || 'Weather station'} (${d.macAddress})`, d.macAddress, false, d === awn.device));
+    $a('awn-device-row').hidden = devices.length < 2;
+    sel.onchange = () => { awn.device = devices.find(d => d.macAddress === sel.value); try { localStorage.setItem(AWN_LS_DEVICE, sel.value); } catch {} };
+
+    const mac = awn.device.macAddress, mac12 = mac.replace(/:/g, '').toUpperCase();
+    const last = table ? table.ts[table.n - 1] : null;
+    const after = last === null ? 0 : last - AWN_OVERLAP_MS;
+    awnLog(last === null ? 'No data loaded: fetching what the API holds…' : `Fetching readings after ${awnLocal(last, awnBrowserTz()).simple}…`);
+    const recs = await awnFetchSince(awn.keys, mac, after, (n) => awnLog(`  batch ${n}`));
+    if (!recs.length) { awnLog('The API returned nothing new.', 'ok'); return; }
+
+    const fresh = recs.filter(r => last === null || r.dateutc > last);
+    if (last !== null && fresh.length && fresh[0].dateutc - last > 300000)
+      awnLog(`Warning: the API starts ${((fresh[0].dateutc - last) / 3600000).toFixed(1)} h after your last reading. It keeps only about 13 days, so that stretch can only come from a dashboard download.`, 'warn');
+    if (!fresh.length) { awnLog('Up to date — nothing newer than your data.', 'ok'); return; }
+
+    let map = null;
+    if (table) {
+      const learned = awnLearnMapping(table, recs);
+      if (learned.overlap >= 12 && learned.map.size) {
+        map = learned.map; awnSaveMapping(mac12, map);
+        awnLog(`Matched ${learned.map.size} of ${table.cols.size} columns to the API on ${learned.overlap} shared readings.`);
+        if (learned.unvalidated.length) awnLog(`Not matched, left empty for the new readings: ${learned.unvalidated.join(', ')}`, 'warn');
+        if (learned.ambiguous.length) awnLog(`Two sensors looked identical for: ${learned.ambiguous.join(', ')}. Check those series.`, 'warn');
+      } else {
+        map = awnSavedMapping(mac12);
+        awnLog(map ? 'Not enough shared readings to check column names; using the mapping saved from last time.'
+                   : 'Not enough shared readings to check column names; using standard names. Sensors you named in the dashboard may appear as new series.', 'warn');
+      }
+    }
+    if (!map) map = awnDefaultMapping(recs);
+
+    const part = awnPart(fresh, map);
+    const cols = mergeColumns(weatherCols, [...map.keys()]);
+    weatherTable = combineTables(table ? [table, part] : [part], cols);
+    weatherCols = cols;
+    datasetSources.weather = table ? (/API update$/.test(datasetSources.weather || '') ? datasetSources.weather : `${datasetSources.weather} + API update`) : 'AWN API';
+    const prev = awn.pending && awn.pending.table === table ? awn.pending.recs : [];
+    awn.pending = { table: weatherTable, mac12, map, recs: prev.concat(fresh) };
+    rebuildDataset({ keepView: true });
+    awnLog(`Added ${fresh.length.toLocaleString()} readings, ${awnLocal(fresh[0].dateutc, awnBrowserTz()).simple} to ${awnLocal(fresh[fresh.length - 1].dateutc, awnBrowserTz()).simple}.`, 'ok');
+  } catch (e) {
+    awnLog(e instanceof AwnError ? e.message : `Something went wrong: ${e.message}`, 'err');
+  } finally { awnBusy(false); }
+}
+async function awnLoadedMac12() {
+  const folder = await awnFolder();
+  if (!folder) return null;
+  try { for await (const e of folder.values()) { const m = e.kind === 'file' && AWN_FILE_RE.exec(e.name); if (m) return m[1]; } } catch { /* no access */ }
+  return null;
+}
+
+async function awnSave() {
+  const p = awn.pending;
+  if (!p || p.table !== weatherTable || awn.busy) return;
+  awnBusy(true);
+  try {
+    const folder = await awnFolder();
+    if (!folder) throw new AwnError('Load a Weather folder first (Load Data → Weather folder), so there is somewhere to save.');
+    if (await folder.requestPermission({ mode: 'readwrite' }) !== 'granted') throw new AwnError('Write access to the folder was not granted.');
+    const changes = await awnWriteRecords(folder, p.mac12, p.recs, p.map);
+    if (!changes.length) awnLog('The folder already has these readings.', 'ok');
+    for (const c of changes) awnLog(`${c.kind === 'created' ? 'Created' : 'Updated'} ${c.name}: +${c.rows.toLocaleString()} rows (${c.from} → ${c.to}).`, 'ok');
+    awn.pending = null;
+  } catch (e) {
+    awnLog(e instanceof AwnError ? e.message : `Could not save: ${e.message}`, 'err');
+  } finally { awnBusy(false); }
+}
+
+$a('api-update-btn').addEventListener('click', openAwnDialog);
+$a('awn-close').addEventListener('click', closeAwnDialog);
+awnBackdrop.addEventListener('click', e => { if (e.target === awnBackdrop) closeAwnDialog(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && awnBackdrop.classList.contains('visible')) closeAwnDialog(); });
+$a('awn-update-btn').addEventListener('click', awnUpdate);
+$a('awn-save-btn').addEventListener('click', awnSave);
+$a('awn-key-save-browser').addEventListener('click', async () => {
+  const api = $a('awn-key-api').value.trim(), app = $a('awn-key-app').value.trim();
+  if (!api || !app) { awnLog('Enter both keys.', 'err'); return; }
+  try { localStorage.setItem(AWN_LS_KEYS, JSON.stringify({ api, app })); }
+  catch { awnLog('This browser would not store the keys (private mode?).', 'err'); return; }
+  $a('awn-key-api').value = $a('awn-key-app').value = '';
+  awn.keys = { api, app, source: 'browser' };
+  await awnRenderKeys(); awnLog('Keys saved in this browser.', 'ok'); awnUpdate();
+});
+$a('awn-keys-file-btn').addEventListener('click', async () => {
+  try {
+    const folder = await awnFolder();
+    if (!folder) throw new AwnError('Load a Weather folder first (Load Data → Weather folder), so there is somewhere to put the file.');
+    if (await folder.requestPermission({ mode: 'readwrite' }) !== 'granted') throw new AwnError('Write access to the folder was not granted.');
+    if (!await awnWriteKeyFile(folder, awn.keys.api, awn.keys.app)) throw new AwnError('The keys file did not read back correctly, so the keys were kept in this browser.');
+    try { localStorage.removeItem(AWN_LS_KEYS); } catch { /* nothing to remove */ }
+    awn.keys = { api: awn.keys.api, app: awn.keys.app, source: 'file' };
+    await awnRenderKeys(); awnLog(`Keys saved to ${AWN_KEYS_FILE} in your Weather folder and removed from this browser.`, 'ok');
+  } catch (e) { awnLog(e instanceof AwnError ? e.message : `Could not save the keys file: ${e.message}`, 'err'); }
+});
+$a('awn-keys-forget-btn').addEventListener('click', async () => {
+  const k = awn.keys; if (!k) return;
+  const btn = $a('awn-keys-forget-btn');
+  if (k.source === 'file' && !awn.forgetArmed) {                       // removing a file's keys is two clicks
+    awn.forgetArmed = true; btn.textContent = 'Click again to remove them from the file';
+    setTimeout(() => { awn.forgetArmed = false; awnRenderKeys(); }, 4000); return;
+  }
+  awn.forgetArmed = false;
+  try {
+    if (k.source === 'file') { const f = await awnFolder(); if (await f.requestPermission({ mode: 'readwrite' }) !== 'granted') throw new AwnError('Write access to the folder was not granted.'); await awnRemoveKeyFile(f); }
+    try { localStorage.removeItem(AWN_LS_KEYS); } catch { /* nothing to remove */ }
+    awn.keys = null; await awnRenderKeys(); awnLog('Keys removed.', 'ok');
+  } catch (e) { awnLog(e instanceof AwnError ? e.message : `Could not remove the keys: ${e.message}`, 'err'); }
+});
 </script>
 </body>
 </html>

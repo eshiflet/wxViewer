@@ -58,17 +58,28 @@ the tab controls two things:
 
 ## Loading your data
 
-### 📂 Open Folder *(recommended)*
-Click **Open Folder** and select the directory containing your CSV files. The app reads all `.csv` files in that folder and remembers the selection — on future visits it reloads automatically (or with one click if permission needs re-granting). Requires Chrome or Edge; Safari 15.2+.
+Click **Load Data** and pick a source:
 
-### Load CSV files
-Standard file picker — select one or more CSV files manually. Works in all browsers.
+- **Weather folder** *(recommended)* — select the directory containing your station CSVs. The app reads every `.csv` in it and remembers the folder: on later visits it reloads automatically (or with one click if permission needs re-granting; if the folder moved, the card says so). Requires Chrome or Edge.
+- **Weather CSV files** — pick one or more files by hand. Works in every browser.
+- **Green Button folder** — a folder of Xcel interval XML exports, remembered the same way.
+
+Weather and meter data load independently and join on time, in either order.
+
+### API Update (Ambient Weather stations)
+
+**API Update** fetches readings newer than your data straight from the Ambient Weather API and merges them in, so you don't have to download the latest month by hand. The API keeps only about **13 days** of 5-minute history, so run it at least weekly; an older gap still needs a dashboard download (the app merges overlapping files by timestamp).
+
+- **Keys.** Create an API key and an application key on your Ambient Weather account page and paste them in. They are stored in *this browser only* and sent only to `rt.ambientweather.net`. **Forget keys** removes them.
+- **Or a keys file.** **Save keys to file** writes a plain-text `.awn_keys` (lines of `API_Key <label> <value>` / `App_Key <label> <value>`) into your Weather folder and removes the keys from the browser. This is a convenience, not extra security: browsers cannot restrict a file's permissions, so anything that can read that folder can read the file.
+- **Your sensor names.** The API only knows sensors by number. The app learns which is which by matching the API against readings you already loaded (and verifies the match before using it), so "Basement" and "Kitchen" stay the same series. Columns it can't verify are left empty rather than guessed.
+- **Saving.** Updates are merged into the chart immediately. **Save new readings to Weather folder** is a separate, explicit step that (with your permission) writes them into the dashboard's monthly CSV format, continuing the newest file or starting a new month, without touching existing rows. Saving is refused if this browser's timezone differs from the one in your files.
 
 ---
 
 ## Running locally
 
-If you want to use the **Open Folder** auto-load on a local copy, serve the directory with the included Python server:
+If you want to use folder loading on a local copy, serve the directory with the included Python server:
 
 ```bash
 cd /path/to/wxViewer
