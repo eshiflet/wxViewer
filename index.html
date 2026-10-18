@@ -12,6 +12,7 @@
     --bg: #0f1117;
     --surface: #1a1d27;
     --surface2: #222638;
+    --panel: #1a1d27;      /* dialogs and popovers; same as the chart panels */
     --border: #2e3245;
     --accent: #4f8ef7;
     --text: #e2e6f0;
@@ -101,21 +102,56 @@
   }
   .shift-btn:hover { color: var(--text); background: var(--surface); }
 
-  .file-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 6px 13px;
-    font-size: 12px;
-    cursor: pointer;
-    white-space: nowrap;
-    color: var(--text);
-  }
-  .file-label:hover { border-color: var(--accent); }
+  /* ── Load Data dialog ─────────────────────────────────────────────────── */
   #file-input { display: none; }
+  .attn-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: #f59e0b;
+    margin-left: 2px; flex-shrink: 0;
+  }
+  .attn-dot[hidden] { display: none; }
+  .load-backdrop {
+    position: fixed; inset: 0; background: #000000aa; z-index: 95;
+    display: none; align-items: center; justify-content: center;
+  }
+  .load-backdrop.visible { display: flex; }
+  .load-modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 12px 40px #000000bb;
+    width: min(500px, 92vw); display: flex; flex-direction: column;
+  }
+  .load-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px 10px;
+  }
+  .load-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .load-close {
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    font-size: 22px; line-height: 1; padding: 2px 8px; border-radius: 4px;
+  }
+  .load-close:hover { color: var(--text); background: var(--surface2); }
+  .load-body { display: flex; flex-direction: column; gap: 8px; padding: 4px 16px 12px; }
+  .load-card {
+    display: flex; align-items: flex-start; gap: 12px; text-align: left;
+    width: 100%; padding: 12px 14px; cursor: pointer;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text); font: inherit;
+  }
+  .load-card svg { flex-shrink: 0; margin-top: 1px; color: var(--accent); }
+  .load-card:hover { border-color: var(--accent); background: #4f8ef710; }
+  .load-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .load-card:disabled { opacity: 0.5; cursor: not-allowed; }
+  .load-card:disabled:hover { border-color: var(--border); background: var(--surface2); }
+  .load-card-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .load-card-title { font-size: 13px; font-weight: 600; }
+  .load-card-desc { font-size: 11px; color: var(--muted); line-height: 1.45; }
+  .load-card-state { font-size: 11px; color: var(--muted); }
+  .load-card-state:empty { display: none; }
+  .load-card-state.attention { color: #f59e0b; }
+  .load-foot {
+    padding: 10px 16px 14px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--muted);
+  }
+
   #file-status { font-size: 11px; color: var(--muted); }
 
   /* ── Main layout ──────────────────────────────────────────── */
@@ -585,17 +621,14 @@
 
 <!-- Toolbar: data loading + date range -->
 <div class="toolbar">
-  <label for="file-input">
-    <span class="file-label">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
-      </svg>
-      Load CSV files
-    </span>
-  </label>
+  <button class="btn icon-btn" id="load-data-btn" aria-haspopup="dialog" title="Load weather and meter data">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+    </svg>
+    Load Data
+    <span class="attn-dot" id="load-attn" hidden title="A remembered folder needs attention"></span>
+  </button>
   <input type="file" id="file-input" accept=".csv" multiple>
-  <button class="btn secondary" id="auto-load-btn" title="Pick a folder of weather station CSV files — remembered for next visit">📂 Weather Data</button>
-  <button class="btn secondary" id="greenbutton-btn" title="Pick a folder of Green Button XML exports — remembered for next visit">⚡ Green Button Data</button>
   <span id="file-status">No files loaded</span>
 
   <div class="divider"></div>
@@ -812,6 +845,41 @@
     <label>Custom <input type="color" id="color-custom"></label>
     <span class="spacer"></span>
     <button id="color-reset">Reset</button>
+  </div>
+</div>
+
+<div class="load-backdrop" id="load-backdrop">
+  <div class="load-modal" role="dialog" aria-modal="true" aria-labelledby="load-title">
+    <div class="load-head">
+      <h3 id="load-title">Load data</h3>
+      <button class="load-close" id="load-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="load-body">
+      <button class="load-card" id="load-csv-card">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>
+        <span class="load-card-text">
+          <span class="load-card-title">Weather CSV files</span>
+          <span class="load-card-desc">Pick one or more station CSV exports. Works in every browser.</span>
+        </span>
+      </button>
+      <button class="load-card" id="auto-load-btn">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <span class="load-card-text">
+          <span class="load-card-title">Weather folder</span>
+          <span class="load-card-desc">A folder of station CSVs. Remembered, and reloaded each visit.</span>
+          <span class="load-card-state"></span>
+        </span>
+      </button>
+      <button class="load-card" id="greenbutton-btn">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
+        <span class="load-card-text">
+          <span class="load-card-title">Green Button folder</span>
+          <span class="load-card-desc">A folder of Xcel interval XML exports. Remembered, and reloaded each visit.</span>
+          <span class="load-card-state"></span>
+        </span>
+      </button>
+    </div>
+    <div class="load-foot">Weather and meter data load independently and join on time, in either order.</div>
   </div>
 </div>
 
@@ -2968,6 +3036,7 @@ async function pickAndLoadFolder({ key, button, load, waiting }) {
       await storeDirHandle(dirHandle, key);
     }
     await load(dirHandle);
+    setFolderState(key === DIR_ENERGY ? 'greenbutton-btn' : 'auto-load-btn', 'Remembered — reloads automatically');
   } catch (e) {
     showLoading(false);
     if (e.name !== 'AbortError') fileStatus.textContent = `Error: ${e.message}`;
@@ -2975,13 +3044,65 @@ async function pickAndLoadFolder({ key, button, load, waiting }) {
   }
 }
 
-document.getElementById('greenbutton-btn').addEventListener('click', () =>
-  pickAndLoadFolder({ key: DIR_ENERGY, load: loadGreenButtonDir,
-                      waiting: 'Waiting for Green Button folder…' }));
+// ── Load Data dialog ─────────────────────────────────────────────────────
+// One entry point for the three ways in. A card closes the dialog and then
+// starts its picker from the same click, so the browser still counts it as a
+// user gesture.
+const loadBackdrop = document.getElementById('load-backdrop');
+const loadDataBtn  = document.getElementById('load-data-btn');
+const loadCards    = [...loadBackdrop.querySelectorAll('.load-card')];
 
-document.getElementById('auto-load-btn').addEventListener('click', () =>
+function openLoadModal() {
+  loadBackdrop.classList.add('visible');
+  loadCards.find(c => !c.disabled)?.focus();
+}
+function closeLoadModal() {
+  if (!loadBackdrop.classList.contains('visible')) return;
+  loadBackdrop.classList.remove('visible');
+  loadDataBtn.focus();
+}
+loadDataBtn.addEventListener('click', openLoadModal);
+document.getElementById('load-close').addEventListener('click', closeLoadModal);
+loadBackdrop.addEventListener('click', e => { if (e.target === loadBackdrop) closeLoadModal(); });
+document.addEventListener('keydown', e => {
+  if (!loadBackdrop.classList.contains('visible')) return;
+  if (e.key === 'Escape') { closeLoadModal(); return; }
+  if (e.key !== 'Tab') return;                       // keep focus inside the dialog
+  const items = [document.getElementById('load-close'), ...loadCards.filter(c => !c.disabled)];
+  const i = items.indexOf(document.activeElement);
+  const next = e.shiftKey ? (i <= 0 ? items.length - 1 : i - 1) : (i === items.length - 1 ? 0 : i + 1);
+  e.preventDefault(); items[next].focus();
+});
+
+// What a remembered folder is doing, shown on its card; a folder that needs
+// the user (permission lapsed, moved) also lights a dot on the Load Data button.
+function setFolderState(id, text, attention = false) {
+  const el = document.querySelector(`#${id} .load-card-state`);
+  if (el) { el.textContent = text; el.classList.toggle('attention', attention); }
+  document.getElementById('load-attn').hidden =
+    !loadBackdrop.querySelector('.load-card-state.attention');
+}
+
+document.getElementById('load-csv-card').addEventListener('click', () => {
+  closeLoadModal();
+  fileInput.click();
+});
+document.getElementById('greenbutton-btn').addEventListener('click', () => {
+  closeLoadModal();
+  pickAndLoadFolder({ key: DIR_ENERGY, load: loadGreenButtonDir,
+                      waiting: 'Waiting for Green Button folder…' });
+});
+document.getElementById('auto-load-btn').addEventListener('click', () => {
+  closeLoadModal();
   pickAndLoadFolder({ key: DIR_WEATHER, load: loadFromDirHandle,
-                      waiting: 'Waiting for weather folder…' }));
+                      waiting: 'Waiting for weather folder…' });
+});
+if (!window.showDirectoryPicker) {
+  for (const id of ['auto-load-btn', 'greenbutton-btn']) {
+    document.getElementById(id).disabled = true;
+    setFolderState(id, 'Needs Chrome or Edge — use Weather CSV files instead');
+  }
+}
 
 // On page load, restore whichever folders are still permitted. Weather goes
 // first so the chart has its axis before the utility data joins it, but either
@@ -2989,27 +3110,23 @@ document.getElementById('auto-load-btn').addEventListener('click', () =>
 (async () => {
   if (!window.showDirectoryPicker) return;
   for (const [key, load, id, label] of [
-    [DIR_WEATHER, loadFromDirHandle,  'auto-load-btn',   '📂 Weather Data'],
-    [DIR_ENERGY,  loadGreenButtonDir, 'greenbutton-btn', '⚡ Green Button Data'],
+    [DIR_WEATHER, loadFromDirHandle,  'auto-load-btn',   'Weather Data'],
+    [DIR_ENERGY,  loadGreenButtonDir, 'greenbutton-btn', 'Green Button Data'],
   ]) {
     const dirHandle = await getStoredDirHandle(key);
     if (!dirHandle) continue;
     const perm = await dirHandle.queryPermission({ mode: 'read' });
     if (perm === 'granted' && !(await folderStillExists(dirHandle))) {
-      // Moved or deleted since last visit — say so on the button, like a
-      // permission lapse, instead of failing quietly.
-      const btn = document.getElementById(id);
-      btn.textContent = label.replace(/^(\S+) /, '$1 Locate ');
-      btn.title = 'The remembered folder was moved or deleted — click to choose it again';
+      // Moved or deleted since last visit — say so, instead of failing quietly.
+      setFolderState(id, 'The remembered folder was moved or deleted — choose it again', true);
     } else if (perm === 'granted') {
-      showLoading(true, `Reloading ${label.slice(2)}…`);
+      showLoading(true, `Reloading ${label}…`);
       await sleep(0);
-      try { await load(dirHandle); } catch { showLoading(false); }
+      try { await load(dirHandle); setFolderState(id, 'Remembered — reloads automatically'); }
+      catch { showLoading(false); }
     } else {
-      // Permission needs re-granting — say so on the button itself
-      const btn = document.getElementById(id);
-      btn.textContent = label.replace(/^(\S+) /, '$1 Reload ');
-      btn.title = 'Click to re-open your previously selected folder';
+      // Permission needs re-granting — say so, and a click does it
+      setFolderState(id, 'Click to re-grant access to your remembered folder', true);
     }
   }
 })();
