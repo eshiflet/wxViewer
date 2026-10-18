@@ -992,44 +992,149 @@ function isIgnored(ts, rule) {
   return false;
 }
 
-// Rows in the active date range, with any ignore periods applied. allRows is
-// never modified, so widening or clearing a period brings the readings back
-// immediately with no reload. Rows are only copied when a rule actually hides
-// a value in them, so the common case costs nothing.
+// ── Columnar data ─────────────────────────────────────────────────────────
+// A Table is one source as loaded: { n, ts, cols } — ts an ascending Float64Array
+// of epoch milliseconds, no repeats, and cols a Map from series name to a
+// Float64Array aligned with ts (NaN where that reading is missing). A row per
+// reading as an object with ~36 properties was most of the page's memory and
+// made every scan pay for the columns it did not want; a column per series is
+// 8 bytes a reading, and a scan touches only what it reads.
+//
+// The two sources are kept as loaded and never merged into one wide table.
+// `joined` is just their shared timeline plus, per source, which of its rows
+// sits at each position (-1 where it has none), so a window onto the data can
+// gather any series on demand without a copy of the whole thing existing.
+
+// Fold parsed parts (one per file) into one Table. Parts may overlap or arrive
+// in any order: readings are ordered by time and, where several carry the same
+// instant, the latest part wins that instant outright — all of its columns, as
+// a replaced row would have.
+function combineTables(parts, colOrder) {
+  let total = 0;
+  for (const p of parts) total += p.ts.length;
+  const cat = new Float64Array(total);
+  for (let o = 0, k = 0; k < parts.length; o += parts[k].ts.length, k++) cat.set(parts[k].ts, o);
+
+  const order = new Uint32Array(total);
+  let sorted = true;
+  for (let i = 0; i < total; i++) { order[i] = i; if (i && cat[i] < cat[i - 1]) sorted = false; }
+  if (!sorted) order.sort((a, b) => cat[a] - cat[b] || a - b);
+
+  const keep = new Uint32Array(total);
+  let n = 0;
+  for (let k = 0; k < total; k++) {
+    const i = order[k];
+    if (n && cat[keep[n - 1]] === cat[i]) keep[n - 1] = i; else keep[n++] = i;
+  }
+  const ts = new Float64Array(n);
+  for (let j = 0; j < n; j++) ts[j] = cat[keep[j]];
+
+  const cols = new Map();
+  for (const name of colOrder) {
+    const buf = new Float64Array(total).fill(NaN);
+    for (let o = 0, k = 0; k < parts.length; o += parts[k].ts.length, k++) {
+      const a = parts[k].cols.get(name);
+      if (a) buf.set(a, o);
+    }
+    const out = new Float64Array(n);
+    for (let j = 0; j < n; j++) out[j] = buf[keep[j]];
+    cols.set(name, out);
+  }
+  return { n, ts, cols };
+}
+
+let joined = { n: 0, ts: new Float64Array(0), widx: null, eidx: null };
+
+function buildJoined() {
+  const w = weatherTable, e = energyTable;
+  const wn = w ? w.n : 0, en = e ? e.n : 0;
+  const ts = new Float64Array(wn + en);
+  const widx = w ? new Int32Array(wn + en).fill(-1) : null;
+  const eidx = e ? new Int32Array(wn + en).fill(-1) : null;
+  let i = 0, j = 0, n = 0;
+  while (i < wn || j < en) {
+    const a = i < wn ? w.ts[i] : Infinity, b = j < en ? e.ts[j] : Infinity;
+    if (a <= b) { ts[n] = a; widx[n] = i++; if (a === b) eidx[n] = j++; }
+    else        { ts[n] = b; eidx[n] = j++; }
+    n++;
+  }
+  return { n, ts: ts.slice(0, n), widx: widx && widx.slice(0, n), eidx: eidx && eidx.slice(0, n) };
+}
+
+// First index whose timestamp is >= t, and first whose timestamp is > t.
+function lowerBoundTs(ts, t) {
+  let lo = 0, hi = ts.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (ts[m] < t) lo = m + 1; else hi = m; }
+  return lo;
+}
+function upperBoundTs(ts, t) {
+  let lo = 0, hi = ts.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (ts[m] <= t) lo = m + 1; else hi = m; }
+  return lo;
+}
+
+// A window onto the joined timeline: rows [i0, i1), no copy of the timestamps.
+// A series is gathered from its source the first time something asks for it,
+// with any ignore period applied by the readings' own timestamps, and kept
+// for as long as the view is. Held to a handful so a pass over every series
+// (the Records tab) doesn't leave all of them resident.
+const MAX_VIEW_COLS = 16;
+function makeView(i0, i1) {
+  const j = joined;
+  i1 = Math.max(i0, i1);
+  return { j, w: weatherTable, e: energyTable, i0, length: i1 - i0, ts: j.ts.subarray(i0, i1), cols: new Map() };
+}
+function viewBetween(t0, t1) {
+  return makeView(lowerBoundTs(joined.ts, t0), upperBoundTs(joined.ts, t1));
+}
+function tsOf(view) { return view.ts; }
+function valsOf(view, col) {
+  let a = view.cols.get(col);
+  if (a) return a;
+  const n = view.length, i0 = view.i0;
+  a = new Float64Array(n).fill(NaN);
+  for (const [tab, idx] of [[view.w, view.j.widx], [view.e, view.j.eidx]]) {
+    const src = tab && tab.cols.get(col);
+    if (!src) continue;
+    for (let i = 0; i < n; i++) { const k = idx[i0 + i]; if (k >= 0) a[i] = src[k]; }
+  }
+  for (const [c, rule] of ignoreRules) {
+    if (c !== col) continue;
+    if (rule.beforeMs !== null) a.fill(NaN, 0, lowerBoundTs(view.ts, rule.beforeMs));
+    if (rule.afterMs  !== null) a.fill(NaN, upperBoundTs(view.ts, rule.afterMs));
+  }
+  view.cols.set(col, a);
+  if (view.cols.size > MAX_VIEW_COLS) view.cols.delete(view.cols.keys().next().value);
+  return a;
+}
+function columnHasData(col) {
+  for (const t of [weatherTable, energyTable]) {
+    const a = t && t.cols.get(col);
+    if (a) for (let i = 0; i < a.length; i++) if (a[i] === a[i]) return true;
+  }
+  return false;
+}
+
+// The window in the active date range. Nothing is modified, so widening or
+// clearing an ignore period brings the readings back immediately with no
+// reload.
 //
 // Memoized: renderChart() calls this on every zoom/pan tick, series toggle,
-// colour change and anomaly toggle, none of which change which rows are
-// visible. Recomputing the filter+mask over the full dataset on each of those
-// was the dominant cost of a chart redraw. The cache key is the actual inputs
-// (by reference for allRows/ignoreRules, by value for the dates), so it can
-// never go stale — no separate invalidation calls to keep in sync.
-let _visibleCache = { allRows: null, dateFrom: NaN, dateTo: NaN, ignoreRules: null, result: [] };
+// colour change and anomaly toggle, none of which change which readings are
+// visible. The cache key is the actual inputs (by reference for the joined
+// timeline and ignoreRules, by value for the dates), so it can never go stale
+// — no separate invalidation calls to keep in sync.
+let _visibleCache = { joined: null, dateFrom: NaN, dateTo: NaN, ignoreRules: null, result: null };
 function visibleRows() {
   const df = dateFrom ? +dateFrom : null;
   const dt = dateTo   ? +dateTo   : null;
   const c = _visibleCache;
-  if (c.allRows === allRows && c.dateFrom === df && c.dateTo === dt && c.ignoreRules === ignoreRules) {
+  if (c.joined === joined && c.dateFrom === df && c.dateTo === dt && c.ignoreRules === ignoreRules) {
     return c.result;
   }
-
-  const inRange = allRows.filter(r => {
-    if (dateFrom && r.ts < dateFrom) return false;
-    if (dateTo   && r.ts > dateTo)   return false;
-    return true;
-  });
-
-  const result = !ignoreRules.length ? inRange : inRange.map(r => {
-    let masked = null;
-    for (const [col, rule] of ignoreRules) {
-      if (r[col] == null) continue;
-      if (!isIgnored(+r.ts, rule)) continue;
-      if (!masked) masked = { ...r };
-      delete masked[col];
-    }
-    return masked || r;
-  });
-
-  _visibleCache = { allRows, dateFrom: df, dateTo: dt, ignoreRules, result };
+  const result = makeView(df === null ? 0 : lowerBoundTs(joined.ts, df),
+                          dt === null ? joined.n : upperBoundTs(joined.ts, dt));
+  _visibleCache = { joined, dateFrom: df, dateTo: dt, ignoreRules, result };
   seriesGapCache.clear();
   return result;
 }
@@ -1057,11 +1162,10 @@ function mergeColumns(existing, headers) {
 // The station and the utility are independent sources on different cadences —
 // five-minute readings against fifteen-minute intervals, over ranges that only
 // partly overlap. Each is kept as it was loaded and the two are joined on the
-// timestamp into allRows, so loading one never disturbs the other and the
+// timestamp into `joined`, so loading one never disturbs the other and the
 // order they arrive in does not matter.
-let weatherRows  = [], weatherCols = [];
-let energyRows   = [], energyCols  = [];
-let allRows      = [];
+let weatherTable = null, weatherCols = [];
+let energyTable  = null, energyCols  = [];
 let columns      = [];
 let checkedCols  = new Set();
 let dateFrom     = null;
@@ -1098,49 +1202,40 @@ const statsBar         = document.getElementById('stats-bar');
 // The header's one-line description of what is loaded: where each source
 // came from, how much of it there is, and what span it covers. Callers say
 // only where they loaded from; the counts and spans are read back off
-// weatherRows/energyRows so they can never drift from the data actually in
+// weatherTable/energyTable so they can never drift from the data actually in
 // hand. Kept as two source-specific segments rather than one joined figure —
-// a joined count is the number of shared rows in allRows, which undercounts
+// a joined count is the number of shared positions, which undercounts
 // either source whenever their timestamps don't line up (a fifteen-minute
 // meter interval among five-minute station readings, mostly).
 const datasetSources = { weather: null, energy: null };
 
 function updateDatasetLabel() {
   const segments = [];
-  if (weatherRows.length) {
-    const first = weatherRows[0].ts, last = weatherRows[weatherRows.length - 1].ts;
-    segments.push(`Weather Dataset: ${datasetSources.weather} · ${weatherRows.length.toLocaleString()} readings`
-      + ` · ${fmtDate(first)} – ${fmtDate(last)}`);
+  if (weatherTable && weatherTable.n) {
+    const t = weatherTable;
+    segments.push(`Weather Dataset: ${datasetSources.weather} · ${t.n.toLocaleString()} readings`
+      + ` · ${fmtDate(new Date(t.ts[0]))} – ${fmtDate(new Date(t.ts[t.n - 1]))}`);
   }
-  if (energyRows.length) {
-    const first = energyRows[0].ts, last = energyRows[energyRows.length - 1].ts;
-    segments.push(`Green Button: ${energyRows.length.toLocaleString()} intervals`
-      + ` · ${fmtDate(first)} – ${fmtDate(last)}`);
+  if (energyTable && energyTable.n) {
+    const t = energyTable;
+    segments.push(`Green Button: ${t.n.toLocaleString()} intervals`
+      + ` · ${fmtDate(new Date(t.ts[0]))} – ${fmtDate(new Date(t.ts[t.n - 1]))}`);
   }
   dataRangeLabel.textContent = segments.join('; ');
 }
 
-// Fold the sources into one row list. A reading that lands on a timestamp the
-// other source already has joins that row; anything else becomes a row of its
-// own, which is what lets utility data from before the station existed sit on
-// the same axis. Source rows are never mutated — a shared timestamp gets a
-// new merged row — so reloading one source cannot leave the other's values
-// behind, and rows that don't collide are shared with weatherRows/energyRows
-// rather than copied (nothing downstream mutates a row; masking copies).
+// Lay the sources on one timeline. A reading that lands on a timestamp the
+// other source already has shares that position; anything else gets a position
+// of its own, which is what lets utility data from before the station existed
+// sit on the same axis. The sources themselves are never altered, so reloading
+// one cannot leave the other's values behind.
 function rebuildDataset() {
-  const byTs = new Map();
-  for (const r of weatherRows) byTs.set(+r.ts, r);
-  for (const r of energyRows) {
-    const t = +r.ts;
-    const at = byTs.get(t);
-    byTs.set(t, at ? { ...at, ...r } : r);
-  }
-  allRows = [...byTs.values()].sort((a, b) => a.ts - b.ts);
+  joined = buildJoined();
   columns = [...weatherCols, ...energyCols.filter(c => !weatherCols.includes(c))];
 
   chartView = null;
-  if (allRows.length) {
-    const first = allRows[0].ts, last = allRows[allRows.length - 1].ts;
+  if (joined.n) {
+    const first = new Date(joined.ts[0]), last = new Date(joined.ts[joined.n - 1]);
     dateFrom = first; dateTo = last;
     dateFromEl.value = toDateTimeInput(first);
     dateToEl.value   = toDateTimeInput(last);
@@ -1153,11 +1248,17 @@ function rebuildDataset() {
 }
 
 // ── CSV Parser ──────────────────────────────────────────────────────────
+// Returns one file as columns: { headers, ts, cols } — ts the epoch milliseconds
+// of each valid row, cols a Map from series name to a Float64Array aligned with
+// it. A cell that is empty or not a number is NaN; a row whose date does not
+// parse is dropped.
 function parseCSV(text) {
-  const lines = text.split('\n').filter(l => l.trim());
-  if (lines.length < 2) return { headers: [], rows: [] };
+  const lines = text.split('\n');
 
   function parseLine(line) {
+    // Station exports have no quoted fields; only pay for the quote-aware
+    // scan when a line actually has a quote in it.
+    if (line.indexOf('"') === -1) return line.split(',');
     const result = []; let cur = '', inQ = false;
     for (let i = 0; i < line.length; i++) {
       const c = line[i];
@@ -1169,39 +1270,36 @@ function parseCSV(text) {
     return result;
   }
 
-  const headers = parseLine(lines[0]);
+  let first = 0;
+  while (first < lines.length && !lines[first].trim()) first++;
+  const empty = { headers: [], ts: new Float64Array(0), cols: new Map() };
+  // A header with no line after it carries no series, not even empty ones.
+  let next = first + 1;
+  while (next < lines.length && !lines[next].trim()) next++;
+  if (next >= lines.length) return empty;
 
-  // Rows are built by a constructor generated for this file's header set, with
-  // every column as a literal key. Filling `row[h] = …` in a loop instead
-  // pushes each of these ~36-property objects into V8's dictionary mode, which
-  // cost ~1.6 KB a row against ~0.6 KB once all rows share one hidden class —
-  // 130k rows of station data is the bulk of the page's memory. Values are
-  // exactly what the loop produced: a number when the cell parses, else the
-  // raw cell text.
-  const num = s => { const v = parseFloat(s); return v !== v ? s : v; };
-  const keyed = [];
+  const headers = parseLine(lines[first]);
+  const keyed = [];                       // column index -> name, skipping blanks
   for (let j = 2; j < headers.length; j++) if (headers[j]) keyed.push(j);
-  let make = null;
-  if (!keyed.some(j => headers[j] === '__proto__')) {
-    make = new Function('ts', 'v', 'num',
-      'return { ts, ' + keyed.map(j => `${JSON.stringify(headers[j])}: num(v[${j}])`).join(', ') + ' };');
-  }
 
-  const rows = [];
-  for (let i = 1; i < lines.length; i++) {
-    const vals = parseLine(lines[i]);
+  const cap = lines.length - first - 1;
+  const ts = new Float64Array(cap);
+  const cols = keyed.map(() => new Float64Array(cap));
+  let n = 0;
+  for (let i = first + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    const vals = parseLine(line);
     if (vals.length < 2) continue;
-    const ts = new Date(vals[0]);
-    if (isNaN(ts)) continue;
-    let row;
-    if (make) row = make(ts, vals, num);
-    else {
-      row = { ts };
-      for (const j of keyed) row[headers[j]] = num(vals[j]);
-    }
-    rows.push(row);
+    const t = +new Date(vals[0]);
+    if (t !== t) continue;
+    ts[n] = t;
+    for (let k = 0; k < keyed.length; k++) cols[k][n] = parseFloat(vals[keyed[k]]);
+    n++;
   }
-  return { headers: headers.slice(2), rows };
+  const map = new Map();
+  keyed.forEach((j, k) => map.set(headers[j], cols[k].slice(0, n)));
+  return { headers: headers.slice(2), ts: ts.slice(0, n), cols: map };
 }
 
 // ── File Loading ────────────────────────────────────────────────────────
@@ -1211,15 +1309,14 @@ fileInput.addEventListener('change', async e => {
   showLoading(true, 'Parsing CSV files…');
   await sleep(0);
 
-  const allParsed = []; let cols = [];
+  const parts = []; let cols = [];
   for (const file of files) {
     const text = await readFile(file);
-    const { headers, rows } = parseCSV(text);
+    const { headers, ts, cols: c } = parseCSV(text);
     cols = mergeColumns(cols, headers);
-    allParsed.push(...rows);
+    parts.push({ ts, cols: c });
   }
-  allParsed.sort((a, b) => a.ts - b.ts);
-  weatherRows = allParsed; weatherCols = cols;
+  weatherTable = combineTables(parts, cols); weatherCols = cols;
   datasetSources.weather = `${files.length} weather file${files.length > 1 ? 's' : ''}`;
   fileStatus.textContent = '';
   rebuildDataset();
@@ -1241,19 +1338,18 @@ document.getElementById('sample-data-btn').addEventListener('click', async () =>
     const res = await fetch('sample-data.csv');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
-    const { headers, rows } = parseCSV(text);
-    rows.sort((a, b) => a.ts - b.ts);
-    weatherRows = rows; weatherCols = headers;
+    const { headers, ts, cols } = parseCSV(text);
+    weatherTable = combineTables([{ ts, cols }], headers.filter(Boolean)); weatherCols = headers;
     datasetSources.weather = 'Sample data';
 
     // Same seven days from the meter, so the sample shows both sources
     // together the way a real dataset would.
     const gbRes = await fetch('sample-greenbutton.xml');
     if (gbRes.ok) {
-      const { rows: gbRows } = parseGreenButton(await gbRes.text());
-      if (gbRows.length) {
-        energyRows = gbRows.sort((a, b) => a.ts - b.ts);
-        energyCols = [GB_ENERGY_COL, ...(GB_INCLUDE_COST && energyRows.some(r => GB_COST_COL in r) ? [GB_COST_COL] : [])];
+      const { part } = parseGreenButton(await gbRes.text());
+      if (part.ts.length) {
+        energyTable = combineTables([part], GB_COLUMNS);
+        energyCols = energyColumnsOf(energyTable);
         datasetSources.energy = 'Sample data';
       }
     }
@@ -1284,7 +1380,7 @@ function buildSidebar() {
   // the first series that carries numbers.
   const anyTemp = columns.some(c => DEFAULT_SELECTED_RE.test(c));
   const firstNumeric = anyTemp ? null
-    : columns.find(c => allRows.some(r => typeof r[c] === 'number' && !isNaN(r[c])));
+    : columns.find(columnHasData);
 
   columns.forEach((col, i) => {
     if (anyTemp ? DEFAULT_SELECTED_RE.test(col) : col === firstNumeric) checkedCols.add(col);
@@ -1528,9 +1624,9 @@ applyBtn.addEventListener('click', () => {
   if (analysisPanel.classList.contains('visible')) renderActiveView();
 });
 allBtn.addEventListener('click', () => {
-  if (!allRows.length) return;
+  if (!joined.n) return;
   chartView = null;
-  dateFrom = allRows[0].ts; dateTo = allRows[allRows.length - 1].ts;
+  dateFrom = new Date(joined.ts[0]); dateTo = new Date(joined.ts[joined.n - 1]);
   dateFromEl.value = toDateTimeInput(dateFrom);
   dateToEl.value   = toDateTimeInput(dateTo);
   renderChart();
@@ -1540,8 +1636,8 @@ allBtn.addEventListener('click', () => {
 // Shift the window by its own length. Clamped to the data so the window keeps
 // its size when it hits either end.
 function shiftWindow(dir) {
-  if (!allRows.length || !dateFrom || !dateTo) return;
-  const first = +allRows[0].ts, last = +allRows[allRows.length - 1].ts;
+  if (!joined.n || !dateFrom || !dateTo) return;
+  const first = joined.ts[0], last = joined.ts[joined.n - 1];
   const len = +dateTo - +dateFrom;
   if (!(len > 0) || len >= last - first) return;
   let from = +dateFrom + dir * len;
@@ -1561,10 +1657,10 @@ document.getElementById('shift-fwd').addEventListener('click', () => shiftWindow
 // Quick-range buttons: 1d / 7d / 30d / 90d
 document.querySelectorAll('[data-days]').forEach(btn => {
   btn.addEventListener('click', () => {
-    if (!allRows.length) return;
+    if (!joined.n) return;
     chartView = null;
     const days = parseInt(btn.dataset.days);
-    dateTo   = allRows[allRows.length - 1].ts;
+    dateTo   = new Date(joined.ts[joined.n - 1]);
     dateFrom = new Date(dateTo.getTime() - days * 86400 * 1000);
     dateFromEl.value = toDateTimeInput(dateFrom);
     dateToEl.value   = toDateTimeInput(dateTo);
@@ -1580,13 +1676,12 @@ exportBtn.addEventListener('click', () => {
 
   const activeCols = columns.filter(c => checkedCols.has(c));
   const header = ['Date', ...activeCols].join(',');
-  const rows = filtered.map(r => {
-    const vals = activeCols.map(c => {
-      const v = r[c];
-      return v == null ? '' : (typeof v === 'string' ? `"${v}"` : v);
-    });
-    return [r.ts.toISOString(), ...vals].join(',');
-  });
+  const ts = tsOf(filtered), series = activeCols.map(c => valsOf(filtered, c));
+  const rows = new Array(filtered.length);
+  for (let i = 0; i < rows.length; i++) {
+    const vals = series.map(a => a[i] === a[i] ? a[i] : '');
+    rows[i] = [new Date(ts[i]).toISOString(), ...vals].join(',');
+  }
   const csv  = [header, ...rows].join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const url  = URL.createObjectURL(blob);
@@ -1613,22 +1708,6 @@ overlayBtn.addEventListener('click', () => {
 });
 
 const yearShift = (ms, years) => { const d = new Date(ms); d.setFullYear(d.getFullYear() + years); return d; };
-
-// Readings from allRows in [t0, t1], with ignore periods applied by their own
-// (real) timestamps. Rows are copied only where a rule hides a value.
-function overlayRows(t0, t1) {
-  const out = [];
-  for (let i = lowerBound(allRows, t0); i < allRows.length; i++) {
-    const r = allRows[i];
-    if (+r.ts > t1) break;
-    let m = null;
-    for (const [col, rule] of ignoreRules) {
-      if (r[col] != null && isIgnored(+r.ts, rule)) { if (!m) m = { ...r }; delete m[col]; }
-    }
-    out.push(m || r);
-  }
-  return out;
-}
 
 // ── Anomaly detection (Tukey IQR) ────────────────────────────────────────
 function detectAnomalies(values) {
@@ -1779,10 +1858,10 @@ function cachedSeriesGapMs(rows, col) {
 
 function seriesGapMs(rows, col) {
   const at = [];
+  const ts = tsOf(rows), vals = valsOf(rows, col);
   const stride = Math.max(1, Math.floor(rows.length / 3000));
   for (let i = 0; i < rows.length; i += stride) {
-    const v = rows[i][col];
-    if (typeof v === 'number' && !isNaN(v)) at.push(+rows[i].ts);
+    if (vals[i] === vals[i]) at.push(ts[i]);
   }
   if (at.length < 3) return Infinity;
   const deltas = [];
@@ -1791,67 +1870,6 @@ function seriesGapMs(rows, col) {
   const median = deltas[deltas.length >> 1] / stride;
   return median > 0 ? median * 3 : Infinity;
 }
-
-// Columnar views of a row list. Row objects carry ~36 properties each and a
-// Date, so scanning them for one series pays for all the rest; the hot loops
-// (decimation, stats) instead read a Float64Array of timestamps and one of
-// values (NaN where the reading is missing). Built lazily per series and held
-// in a WeakMap keyed on the row array itself, so replacing the rows — a new
-// date range, ignore period or dataset — drops the cache with no invalidation.
-const colCache = new WeakMap();
-function tsOf(rows) {
-  let c = colCache.get(rows);
-  if (!c) colCache.set(rows, c = { ts: null, cols: new Map() });
-  if (!c.ts) {
-    const a = new Float64Array(rows.length);
-    for (let i = 0; i < rows.length; i++) a[i] = +rows[i].ts;
-    c.ts = a;
-  }
-  return c.ts;
-}
-// One extractor per column name, generated with the name as a literal key.
-// `rows[i][col]` with a different `col` on every pass is a megamorphic keyed
-// load (~100 ns); with the name baked into the source it is a plain named
-// load, which is the difference between ~1 s and ~0.1 s to read every column
-// of two years of station data.
-const extractors = new Map();
-function extractorFor(col) {
-  let f = extractors.get(col);
-  if (!f) {
-    f = col === '__proto__'
-      ? (rows, out) => { for (let i = 0; i < rows.length; i++) { const v = rows[i][col]; out[i] = typeof v === 'number' ? v : NaN; } }
-      : new Function('rows', 'out',
-          'for (let i = 0; i < rows.length; i++) { const v = rows[i][' + JSON.stringify(col) +
-          ']; out[i] = typeof v === "number" ? v : NaN; }');
-    extractors.set(col, f);
-  }
-  return f;
-}
-function valsOf(rows, col) {
-  tsOf(rows);
-  const c = colCache.get(rows);
-  let a = c.cols.get(col);
-  if (!a) {
-    a = new Float64Array(rows.length);
-    extractorFor(col)(rows, a);
-    c.cols.set(col, a);
-  }
-  return a;
-}
-
-// First index whose timestamp is >= t. Rows are always chronological
-// (allRows is sorted once in rebuildDataset and every later filter/map
-// preserves order), so decimation can jump straight to the visible window
-// instead of scanning from the start of the dataset on every zoom/pan tick.
-function lowerBoundTs(ts, t) {
-  let lo = 0, hi = ts.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (ts[mid] < t) lo = mid + 1; else hi = mid;
-  }
-  return lo;
-}
-function lowerBound(rows, t) { return lowerBoundTs(tsOf(rows), t); }
 
 function decimateColumn(rows, col, t0, t1, bins, gapMs) {
   const width = (t1 - t0) / bins;
@@ -1934,7 +1952,7 @@ function usesRightAxis(col) { return RIGHT_AXIS_UNITS.test(unitOf(col)); }
 let chartRendered = false;
 
 function renderChart() {
-  if (!allRows.length || !checkedCols.size) {
+  if (!joined.n || !checkedCols.size) {
     emptyState.style.display = 'flex';
     chartEl.style.display = 'none';
     return;
@@ -1953,13 +1971,13 @@ function renderChart() {
 
   // times/yvals below are only needed for anomaly markers — skip the
   // allocation (one array per selected series) when that toggle is off.
-  const times  = showAnomalies ? filtered.map(r => r.ts) : null;
+  const times  = showAnomalies ? Array.from(tsOf(filtered), t => new Date(t)) : null;
   const traces = [];
   let totalAnomalies = 0;
 
   // The window to draw at full detail: whatever the chart is zoomed to, or
   // everything. A stale zoom from a previous date range is discarded.
-  const full = [+filtered[0].ts, +filtered[filtered.length - 1].ts];
+  const full = [filtered.ts[0], filtered.ts[filtered.length - 1]];
   if (chartView && (chartView[0] >= chartView[1] ||
                     chartView[1] < full[0] || chartView[0] > full[1])) chartView = null;
   const view  = chartView || full;
@@ -1979,7 +1997,7 @@ function renderChart() {
     if (!checkedCols.has(col)) return;
     const color  = seriesColor(col, i);
     const onRight = useRight && usesRightAxis(col);
-    const yvals  = showAnomalies ? filtered.map(r => typeof r[col] === 'number' ? r[col] : null) : null;
+    const yvals  = showAnomalies ? Array.from(valsOf(filtered, col), v => v === v ? v : null) : null;
     const drawn  = decimateForView(filtered, col, view, full, cachedSeriesGapMs(filtered, col), bins);
 
     traces.push({
@@ -2037,7 +2055,7 @@ function renderChart() {
   if (showOverlay) {
     const prevFull = [+yearShift(full[0], -1), +yearShift(full[1], -1)];
     const prevView = [+yearShift(view[0], -1), +yearShift(view[1], -1)];
-    const prev = overlayRows(prevFull[0], prevFull[1]);
+    const prev = viewBetween(prevFull[0], prevFull[1]);
     if (!prev.length) {
       fileStatus.textContent = 'No data from one year earlier for this window';
     } else {
@@ -2165,9 +2183,16 @@ function renderChart() {
   updateStatsBar(filtered);
 }
 
+// The chips describe the visible window, which a zoom or pan does not change,
+// so they are rebuilt only when the window, the series or a series' colour is.
+let _statsKey = null, _statsView = null;
 function updateStatsBar(filtered) {
   const activeCols = columns.filter(c => checkedCols.has(c));
-  if (!activeCols.length) { statsBar.style.display = 'none'; return; }
+  if (!activeCols.length) { statsBar.style.display = 'none'; _statsView = null; return; }
+
+  const key = activeCols.map(c => c + '\u0000' + seriesColor(c, columns.indexOf(c))).join('\u0001');
+  if (_statsView === filtered && _statsKey === key && statsBar.style.display === 'flex') return;
+  _statsView = filtered; _statsKey = key;
 
   statsBar.style.display = 'flex';
   statsBar.innerHTML = '';
@@ -2489,7 +2514,7 @@ function triggerChartResize() {
 }
 
 analyzeBtn.addEventListener('click', () => {
-  if (!allRows.length) return;
+  if (!joined.n) return;
   const open = analysisPanel.classList.toggle('visible');
   analyzeBtn.classList.toggle('active', open);
   triggerChartResize();
@@ -2514,7 +2539,7 @@ document.querySelectorAll('.analysis-tab').forEach(tab => {
 });
 
 function renderActiveView() {
-  if (!allRows.length) return;
+  if (!joined.n) return;
   const filtered = visibleRows();
   if (activeView === 'wind-rose')  renderWindRose(filtered);
   if (activeView === 'diurnal')    renderDiurnal(filtered);
@@ -2541,9 +2566,10 @@ function renderWindRose(filtered) {
   const count = Array.from({length: 16}, () => Array(4).fill(0));
   let total = 0;
 
-  for (const r of filtered) {
-    const d = r[dirCol], s = r[speedCol];
-    if (typeof d !== 'number' || typeof s !== 'number') continue;
+  const dirs = valsOf(filtered, dirCol), speeds = valsOf(filtered, speedCol);
+  for (let i = 0; i < dirs.length; i++) {
+    const d = dirs[i], s = speeds[i];
+    if (d !== d || s !== s) continue;
     if (s < 0.5) continue; // calm — skip
     const dirBin   = Math.round(d / 22.5) % 16;
     const speedBin = SPEED_BINS.findIndex(b => s < b.max);
@@ -2602,23 +2628,26 @@ function renderDiurnal(filtered) {
   // Pick the primary checked numeric column (prefer outdoor temp)
   const col = checkedCols.has('Outdoor Temperature (°F)')
     ? 'Outdoor Temperature (°F)'
-    : [...checkedCols].find(c => columns.includes(c) && typeof filtered[0]?.[c] === 'number');
+    : [...checkedCols].find(c => columns.includes(c) && filtered.length && valsOf(filtered, c)[0] === valsOf(filtered, c)[0]);
   if (!col) return;
 
   // hourly[month][hour] = [values]
   const byMonthHour = {};
-  for (const r of filtered) {
-    const v = r[col];
-    if (typeof v !== 'number') continue;
-    const m = r.ts.getMonth();
-    const h = r.ts.getHours();
-    const key = `${m}-${h}`;
+  const ts = tsOf(filtered), series = valsOf(filtered, col);
+  const when = new Date(0), seen = new Set();
+  for (let i = 0; i < series.length; i++) {
+    when.setTime(ts[i]);
+    const m = when.getMonth();
+    seen.add(m);
+    const v = series[i];
+    if (v !== v) continue;
+    const key = `${m}-${when.getHours()}`;
     if (!byMonthHour[key]) byMonthHour[key] = [];
     byMonthHour[key].push(v);
   }
 
   // Find which months are in the data
-  const months = [...new Set(filtered.map(r => r.ts.getMonth()))].sort((a, b) => a - b);
+  const months = [...seen].sort((a, b) => a - b);
   const hours  = Array.from({length: 24}, (_, i) => i);
 
   const traces = months.map(m => {
@@ -2720,18 +2749,30 @@ const ESPI_WATT_HOURS = 72;   // uom code
 // this to surface it.
 const GB_INCLUDE_COST = false;
 
+// What the energy source contributes as series: the energy always, the cost
+// only when it is switched on and the feed actually carried some.
+const GB_COLUMNS = [GB_ENERGY_COL, ...(GB_INCLUDE_COST ? [GB_COST_COL] : [])];
+function energyColumnsOf(table) {
+  const cost = table.cols.get(GB_COST_COL);
+  const hasCost = GB_INCLUDE_COST && cost && cost.some(v => v === v);
+  return [GB_ENERGY_COL, ...(hasCost ? [GB_COST_COL] : [])];
+}
+
+// One feed as columns: { part: { ts, cols }, uom }. `part` is empty when the
+// feed is in a unit we do not handle, with the unit reported in `uom`.
 function parseGreenButton(text) {
   const tag = (blk, name) => {
     const m = new RegExp(`<espi:${name}>(-?\\d+)</espi:${name}>`).exec(blk);
     return m ? +m[1] : null;
   };
+  const none = (uom) => ({ part: { ts: new Float64Array(0), cols: new Map() }, uom });
   const rt = /<espi:ReadingType>([\s\S]*?)<\/espi:ReadingType>/.exec(text);
   const pot = rt ? (tag(rt[1], 'powerOfTenMultiplier') ?? 0) : 0;
   const uom = rt ? tag(rt[1], 'uom') : ESPI_WATT_HOURS;
-  if (uom !== null && uom !== ESPI_WATT_HOURS) return { rows: [], uom };
+  if (uom !== null && uom !== ESPI_WATT_HOURS) return none(uom);
 
   const scale = Math.pow(10, pot) / 1000;        // raw -> kWh
-  const out = [];
+  const ts = [], energy = [], cost = [];
   const re = /<espi:IntervalReading>([\s\S]*?)<\/espi:IntervalReading>/g;
   let m;
   while ((m = re.exec(text))) {
@@ -2740,14 +2781,16 @@ function parseGreenButton(text) {
     const start = tag(blk, 'start');
     const value = tag(blk, 'value');
     if (start === null || value === null) continue;
-    const row = { ts: new Date(start * 1000), [GB_ENERGY_COL]: value * scale };
+    ts.push(start * 1000);
+    energy.push(value * scale);
     if (GB_INCLUDE_COST) {
-      const cost = tag(blk, 'cost');
-      if (cost !== null) row[GB_COST_COL] = cost / 1e5;
+      const c = tag(blk, 'cost');
+      cost.push(c !== null ? c / 1e5 : NaN);
     }
-    out.push(row);
   }
-  return { rows: out, uom };
+  const cols = new Map([[GB_ENERGY_COL, Float64Array.from(energy)]]);
+  if (GB_INCLUDE_COST) cols.set(GB_COST_COL, Float64Array.from(cost));
+  return { part: { ts: Float64Array.from(ts), cols }, uom };
 }
 
 // ── Folder-based auto-load (File System Access API + IndexedDB persistence) ──
@@ -2788,20 +2831,19 @@ async function storeDirHandle(handle, key = DIR_WEATHER) {
 }
 
 async function loadFromDirHandle(dirHandle) {
-  const allParsed = []; let cols = []; let count = 0;
+  const parts = []; let cols = []; let count = 0;
   for await (const entry of dirHandle.values()) {
     if (entry.kind !== 'file' || !entry.name.toLowerCase().endsWith('.csv')) continue;
     count++;
     showLoading(true, `Loading ${entry.name}…`);
     const file = await entry.getFile();
     const text = await file.text();
-    const { headers, rows } = parseCSV(text);
+    const { headers, ts, cols: c } = parseCSV(text);
     cols = mergeColumns(cols, headers);
-    allParsed.push(...rows);
+    parts.push({ ts, cols: c });
   }
   if (!count) { showLoading(false); fileStatus.textContent = 'No CSV files found in that folder'; return; }
-  allParsed.sort((a, b) => a.ts - b.ts);
-  weatherRows = allParsed; weatherCols = cols;
+  weatherTable = combineTables(parts, cols); weatherCols = cols;
   datasetSources.weather = `${count} weather file${count > 1 ? 's' : ''}`;
   fileStatus.textContent = '';
   rebuildDataset();
@@ -2826,17 +2868,18 @@ async function loadGreenButtonDir(dirHandle) {
     return;
   }
 
-  const byTs = new Map();
+  const parts = [];
   let wrongUnits = 0;
   for (const e of entries) {
     showLoading(true, `Reading ${e.name}…`);
     await sleep(0);
-    const { rows, uom } = parseGreenButton(await (await e.getFile()).text());
-    if (!rows.length && uom !== null && uom !== ESPI_WATT_HOURS) { wrongUnits++; continue; }
-    for (const r of rows) byTs.set(+r.ts, r);
+    const { part, uom } = parseGreenButton(await (await e.getFile()).text());
+    if (!part.ts.length && uom !== null && uom !== ESPI_WATT_HOURS) { wrongUnits++; continue; }
+    parts.push(part);
   }
+  const table = combineTables(parts, GB_COLUMNS);
 
-  if (!byTs.size) {
+  if (!table.n) {
     showLoading(false);
     fileStatus.textContent = wrongUnits
       ? `${wrongUnits} file(s) are not in watt-hours — not supported`
@@ -2844,13 +2887,13 @@ async function loadGreenButtonDir(dirHandle) {
     return;
   }
 
-  energyRows = [...byTs.values()].sort((a, b) => a.ts - b.ts);
-  energyCols = [GB_ENERGY_COL, ...(GB_INCLUDE_COST && energyRows.some(r => GB_COST_COL in r) ? [GB_COST_COL] : [])];
+  energyTable = table;
+  energyCols = energyColumnsOf(table);
   datasetSources.energy =
     `${entries.length} Green Button file${entries.length > 1 ? 's' : ''}`;
   // Interval count and duplicate-merge count used to print here, next to the
   // button — now redundant with the Green Button segment of the header's
-  // dataset line, which reads the same counts off energyRows.
+  // dataset line, which reads the same counts off energyTable.
   fileStatus.textContent = '';
   rebuildDataset();
 }
