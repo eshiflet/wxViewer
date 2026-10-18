@@ -818,6 +818,29 @@
                 </div>
               </div>
               </div>
+
+              <!-- EXPERIMENTAL: A/C run estimate (remove with the JS block of the same name) -->
+              <div class="season-row" id="ac-est-group" style="display:none">
+              <div class="season-group">
+                <div class="season-group-title hvac">⚡ Estimate A/C runs from electricity (experimental)</div>
+                <label class="sensor-item"><input type="checkbox" id="ac-est-on"> Use the electricity feed to estimate when the A/C ran</label>
+                <div class="sensor-hint">
+                  For stretches with no HVAC probe: meter load, plus the basement trend while its
+                  zone dampers were stuck open. Adds an “A/C probability (est.)” series and fills in
+                  the thermal model's idle/cooling hours. Hours with a probe reading are never overridden.
+                </div>
+              </div>
+              <div class="season-group">
+                <div class="season-group-title hvac">🏠 Basement sensor</div>
+                <select class="sensor-select" id="ac-est-basement"></select>
+                <div class="sensor-hint">Cold-air leak shows up as a fast temperature fall while the compressor runs.</div>
+              </div>
+              <div class="season-group">
+                <div class="season-group-title hvac">🔧 Basement dampers fixed on</div>
+                <input type="date" class="sensor-select" id="ac-est-fixed">
+                <div class="sensor-hint">The basement trend is used only before this date; after it the basement no longer reacts. Clear it to ignore the basement.</div>
+              </div>
+              </div>
             </div>
           </div>
           <div id="thermal-summary" style="padding:8px 16px;border-bottom:1px solid var(--border);display:flex;gap:24px;flex-shrink:0;flex-wrap:wrap"></div>
@@ -1374,6 +1397,7 @@ function rebuildDataset(opts = {}) {
   // it was) and the selected series.
   const prev = opts.keepView && joined.n && dateFrom && dateTo
     ? { from: dateFrom, to: dateTo, first: joined.ts[0], last: joined.ts[joined.n - 1] } : null;
+  acEstSync();                                  // experimental A/C estimate series (no-op while off)
   joined = buildJoined();
   columns = [...weatherCols, ...energyCols.filter(c => !weatherCols.includes(c))];
 
@@ -2461,10 +2485,12 @@ function setThermalSensors(next) {
   saveThermalSensors({ outdoor: next.outdoor, hvac: next.hvac || '', indoor: next.indoor });
   renderSensorConfig();
   updateSeasonSummary(loadSeasonConfig());
+  if (acEstConfig().on) { rebuildDataset({ keepView: true }); return; }   // the estimate follows the outdoor sensor
   if (analysisPanel.classList.contains('visible')) renderActiveView();
 }
 
 function renderSensorConfig() {
+  renderAcEstConfig();
   const list   = document.getElementById('indoor-sensor-list');
   const outSel = document.getElementById('outdoor-sensor-select');
   const hvSel  = document.getElementById('hvac-sensor-select');
@@ -3404,6 +3430,252 @@ function hvacRuns(detected) {
   return runs;
 }
 
+// ══ EXPERIMENTAL: A/C run estimate from the electricity feed (begin) ══════════
+// For stretches with no supply-duct probe: say when the A/C probably ran from
+// the meter's load, sharpened — while a zone's dampers were stuck open — by how
+// the basement temperature was trending (it chills fast whenever the compressor
+// runs). OFF by default; switched on in ⚙ Configuration. To remove the whole
+// experiment, delete everything between this banner and the matching "(end)"
+// banner, plus the `acEstSync()` call in rebuildDataset(), the `acEst…` hooks
+// in renderThermal()/renderThermalSummaryCards()/renderThermalMonthlyChart()/
+// setThermalSensors()/renderSensorConfig(), and the #ac-est-group markup.
+//
+// The tables below were fitted offline: the meter table on intervals where the
+// probe says whether the compressor ran, the slope table on intervals the meter
+// was already sure about. Each is a log-likelihood ratio (log P(obs|on)/P(obs|off));
+// bin i holds values from edge i-1 up to edge i, with a bin below the first
+// edge and one above the last.
+const AC_EST_KEY   = 'wxviewer-ac-estimate';
+const AC_EST_COL   = 'A/C probability (est.)';
+const AC_EST_MODEL = {
+  kwEdges:    [0.15, 0.3, 0.45, 0.6, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 3.0, 3.5, 4.5],   // kW above idle
+  kwLlr:      [-3.112, -1.27, -0.278, 0.424, 1.721, 1.92, 2.712, 2.941, 4.716, 4.656, 2.489, 3.859, 2.529, 1.003, -0.019, -0.355],
+  outEdges:   [40, 50, 60, 70, 80, 90],                                                            // outdoor °F
+  outLlr:     [-2.795, -4.793, -0.756, -0.648, 1.07, 2.524, 1.599],
+  outWeight:  0.7,
+  slopeEdges: [-0.6, -0.35, -0.15, 0.0, 0.15, 0.3],                                                // basement °F/hour
+  slopeLlr:   [3.0, 2.501, 0.474, -1.562, -3.0, -3.0, -3.0],
+  slopeWeight: 0.8,
+  stay:       0.8,       // chance the state carries over to the next 15 minutes
+  idleHalf:   24,        // intervals either side for the idle-load reference
+  idleQ:      0.15,
+  coolMinOut: 55,        // an hour only counts as cooling when it was at least this warm outside
+  passiveMinOut: 65,     // ...and only as certainly-passive when at least this warm (cooler hours may be heating)
+};
+
+let acEstMem = null;   // in-memory copy when localStorage is unavailable
+function acEstConfig() {
+  let c = null;
+  try { c = JSON.parse(localStorage.getItem(AC_EST_KEY)); } catch { /* none saved */ }
+  c = c || acEstMem || {};
+  return { on: !!c.on, basement: c.basement || '', dampersFixed: c.dampersFixed ?? '2026-06-01' };
+}
+function acEstSave(cfg) {
+  acEstMem = cfg;
+  try { localStorage.setItem(AC_EST_KEY, JSON.stringify(cfg)); } catch { /* storage unavailable */ }
+}
+function acEstBasementCol(cfg) {
+  if (cfg.basement && weatherCols.includes(cfg.basement)) return cfg.basement;
+  return weatherCols.find(c => /basement/i.test(c) && DEFAULT_SELECTED_RE.test(c)) || '';
+}
+function acEstOutdoorCol() {
+  const saved = loadThermalSensors();
+  if (saved && weatherCols.includes(saved.outdoor)) return saved.outdoor;
+  return guessThermalSensors(weatherCols).outdoor;
+}
+
+function acBin(edges, x) { let i = 0; while (i < edges.length && x >= edges[i]) i++; return i; }
+
+// Two-state smoother over one run of consecutive intervals.
+function acForwardBackward(llr, stay) {
+  const n = llr.length, a = new Float64Array(2 * n), b = new Float64Array(2 * n).fill(1);
+  const like = i => Math.exp(Math.max(-30, Math.min(30, llr[i])));
+  for (let i = 0; i < n; i++) {
+    const e0 = like(i);                       // state 0 = on, 1 = off
+    if (i === 0) { a[0] = 0.5 * e0; a[1] = 0.5; }
+    else {
+      a[2 * i]     = e0 * (a[2 * i - 2] * stay + a[2 * i - 1] * (1 - stay));
+      a[2 * i + 1] = 1  * (a[2 * i - 2] * (1 - stay) + a[2 * i - 1] * stay);
+    }
+    const z = a[2 * i] + a[2 * i + 1]; a[2 * i] /= z; a[2 * i + 1] /= z;
+  }
+  for (let i = n - 2; i >= 0; i--) {
+    const e0 = like(i + 1);
+    b[2 * i]     = stay * e0 * b[2 * i + 2] + (1 - stay) * b[2 * i + 3];
+    b[2 * i + 1] = (1 - stay) * e0 * b[2 * i + 2] + stay * b[2 * i + 3];
+    const z = b[2 * i] + b[2 * i + 1]; b[2 * i] /= z; b[2 * i + 1] /= z;
+  }
+  const p = new Float64Array(n);
+  for (let i = 0; i < n; i++) { const x = a[2 * i] * b[2 * i], y = a[2 * i + 1] * b[2 * i + 1]; p[i] = x / (x + y); }
+  return p;
+}
+
+let acEstCache = null;
+// Probability the A/C ran in each meter interval. `p` is NaN where the meter
+// is missing or reads as an outage; `pMeter` is the same without the basement.
+function acEstimate(cfg) {
+  const e = energyTable, w = weatherTable;
+  const kwh = e && e.cols.get(GB_ENERGY_COL);
+  if (!kwh || !w || !e.n) return null;
+  const outCol = acEstOutdoorCol(), basCol = acEstBasementCol(cfg);
+  const key = [e, w, outCol, basCol, cfg.dampersFixed];
+  if (acEstCache && acEstCache.key.every((k, i) => k === key[i])) return acEstCache.est;
+
+  const M = AC_EST_MODEL, n = e.n, STEP = 900000;
+  const out = outCol ? w.cols.get(outCol) : null, bas = basCol ? w.cols.get(basCol) : null;
+  const fixMs = cfg.dampersFixed ? new Date(cfg.dampersFixed + 'T00:00:00').getTime() : -Infinity;
+
+  // Zero-load runs of two or more intervals are outages (and the meter is
+  // unreliable just after power returns): leave them out entirely.
+  const usable = new Uint8Array(n);
+  for (let i = 0; i < n; i++) usable[i] = kwh[i] === kwh[i] ? 1 : 0;
+  for (let i = 0; i < n;) {
+    if (kwh[i] !== 0) { i++; continue; }
+    let j = i;
+    while (j + 1 < n && kwh[j + 1] === 0 && e.ts[j + 1] - e.ts[j] === STEP) j++;
+    if (j > i) for (let k = i; k <= Math.min(n - 1, j + 3); k++) usable[k] = 0;
+    i = j + 1;
+  }
+  const U = []; for (let i = 0; i < n; i++) if (usable[i]) U.push(i);
+
+  const p = new Float64Array(n).fill(NaN), pMeter = new Float64Array(n).fill(NaN);
+  const slopeUsed = new Uint8Array(n);
+  const llrM = new Float64Array(n), llrF = new Float64Array(n);
+  const wn = w.n; let wlo = 0, whi = 0, slo = 0, shi = 0;
+  for (let u = 0; u < U.length; u++) {
+    const i = U[u], t = e.ts[i], kw = kwh[i] * 4;
+    // idle reference: low percentile of the surrounding usable loads
+    const win = [];
+    for (let k = Math.max(0, u - M.idleHalf); k <= Math.min(U.length - 1, u + M.idleHalf); k++) win.push(kwh[U[k]] * 4);
+    win.sort((x, y) => x - y);
+    const idle = win[Math.floor(win.length * M.idleQ)];
+    let l = M.kwLlr[acBin(M.kwEdges, kw - idle)];
+
+    // mean outdoor over this interval
+    while (wlo < wn && w.ts[wlo] < t) wlo++;
+    if (whi < wlo) whi = wlo;
+    while (whi < wn && w.ts[whi] < t + STEP) whi++;
+    let so = 0, no = 0;
+    if (out) for (let k = wlo; k < whi; k++) { const v = out[k]; if (v === v) { so += v; no++; } }
+    if (no) l += M.outWeight * M.outLlr[acBin(M.outEdges, so / no)];
+    llrM[i] = l;
+    llrF[i] = l;
+
+    // basement trend over t-30..t+45 min, only while the dampers were stuck
+    if (bas && t < fixMs) {
+      while (slo < wn && w.ts[slo] < t - 1800000) slo++;
+      if (shi < slo) shi = slo;
+      while (shi < wn && w.ts[shi] <= t + 2700000) shi++;
+      let n2 = 0, sx = 0, sy = 0, lo = Infinity, hi = -Infinity;
+      for (let k = slo; k < shi; k++) { const v = bas[k]; if (v === v) { n2++; sx += (w.ts[k] - t) / 3600000; sy += v; if (v < lo) lo = v; if (v > hi) hi = v; } }
+      if (n2 >= 8 && hi - lo < 15) {
+        const mx = sx / n2, my = sy / n2; let sxy = 0, sxx = 0;
+        for (let k = slo; k < shi; k++) { const v = bas[k]; if (v === v) { const dx = (w.ts[k] - t) / 3600000 - mx; sxy += dx * (v - my); sxx += dx * dx; } }
+        if (sxx > 0) { llrF[i] += M.slopeWeight * M.slopeLlr[acBin(M.slopeEdges, sxy / sxx)]; slopeUsed[i] = 1; }
+      }
+    }
+  }
+  // smooth each run of back-to-back usable intervals
+  for (let u = 0; u < U.length;) {
+    let v = u;
+    while (v + 1 < U.length && e.ts[U[v + 1]] - e.ts[U[v]] === STEP) v++;
+    const idx = U.slice(u, v + 1);
+    const pf = acForwardBackward(idx.map(i => llrF[i]), M.stay), pm = acForwardBackward(idx.map(i => llrM[i]), M.stay);
+    idx.forEach((i, k) => { p[i] = pf[k]; pMeter[i] = pm[k]; });
+    u = v + 1;
+  }
+  // Outdoor temperature per interval, kept for the hourly roll-up
+  const outMean = new Float64Array(n).fill(NaN);
+  if (out) { let a = 0, b = 0;
+    for (let i = 0; i < n; i++) { const t = e.ts[i];
+      while (a < wn && w.ts[a] < t) a++; if (b < a) b = a; while (b < wn && w.ts[b] < t + STEP) b++;
+      let s = 0, c = 0; for (let k = a; k < b; k++) { const v = out[k]; if (v === v) { s += v; c++; } }
+      if (c) outMean[i] = s / c; } }
+  const est = { ts: e.ts, p, pMeter, slopeUsed, outMean, basCol, outCol, dampersFixed: cfg.dampersFixed };
+  acEstCache = { key, est };
+  return est;
+}
+
+// One label per clock hour, only where the evidence is clear enough to train on
+// and only for hours without a measured state: 'cool' | 'passive'.
+function acEstHourlyModes(est, from, to) {
+  const M = AC_EST_MODEL, byHour = new Map();
+  for (let i = 0; i < est.ts.length; i++) {
+    const t = est.ts[i]; if (t < from || t > to || est.p[i] !== est.p[i]) continue;
+    const h = Math.floor(t / 3600000) * 3600000;
+    let b = byHour.get(h); if (!b) byHour.set(h, b = { s: 0, sm: 0, n: 0, o: 0, no: 0, slope: 0 });
+    b.s += est.p[i]; b.sm += est.pMeter[i]; b.n++; b.slope += est.slopeUsed[i];
+    if (est.outMean[i] === est.outMean[i]) { b.o += est.outMean[i]; b.no++; }
+  }
+  const modes = new Map(), stats = { coolHours: 0, passiveHours: 0, changedByBasement: 0, withBasement: 0 };
+  for (const [h, b] of byHour) {
+    if (b.n < 3 || !b.no) continue;
+    const out = b.o / b.no, pm = b.s / b.n;
+    let mode = null;
+    if (pm > 0.5 && out >= M.coolMinOut) mode = 'cool';
+    else if (pm <= 0.5 && out >= M.passiveMinOut) mode = 'passive';
+    if (!mode) continue;
+    modes.set(h, mode);
+    if (mode === 'cool') stats.coolHours++; else stats.passiveHours++;
+    if (b.slope >= b.n / 2) { stats.withBasement++; if ((b.sm / b.n > 0.5) !== (pm > 0.5)) stats.changedByBasement++; }
+  }
+  return { modes, stats };
+}
+
+// Keep the probability series in step with the toggle. Called whenever the
+// dataset is (re)built, so a reload, an API update or a toggle all land here.
+function acEstSync() {
+  if (energyTable) energyTable.cols.delete(AC_EST_COL);
+  if (energyCols.includes(AC_EST_COL)) energyCols = energyCols.filter(c => c !== AC_EST_COL);
+  const cfg = acEstConfig();
+  if (!cfg.on) return;
+  const est = acEstimate(cfg);
+  if (!est) return;
+  energyTable.cols.set(AC_EST_COL, est.p);
+  energyCols = [...energyCols, AC_EST_COL];
+}
+
+// The Thermal summary's account of what the estimate did.
+function renderAcEstCard(summaryEl, info, est) {
+  const li = [];
+  const s = info.stats, tot = s.coolHours + s.passiveHours;
+  li.push(`<li><b>${s.coolHours} cooling</b> and <b>${s.passiveHours} passive</b> hours were <b>estimated</b> from the electricity feed in this range (hours with a duct-probe reading keep the measured state)</li>`);
+  if (est.basCol && s.withBasement)
+    li.push(`<li>${s.withBasement} of them also had basement-trend evidence (${stripUnit(est.basCol)}, used until ${est.dampersFixed || 'never'}); it <b>changed the call</b> for ${s.changedByBasement}</li>`);
+  else
+    li.push(`<li>No basement-trend evidence in this range${est.basCol ? '' : ' (no basement sensor chosen)'} — meter load alone decided</li>`);
+  li.push(`<li>Other hours (cool outdoors, or unclear) are left to the season ranges / RANSAC as before</li>`);
+  li.push(`<li>Experimental — switch off in ⚙ Configuration to compare</li>`);
+  const el = document.createElement('div');
+  el.className = 'interp-card';
+  el.innerHTML = `<div class="interp-card-title">⚡ Estimated A/C state — ${tot} hours</div><ul>${li.join('')}</ul>`;
+  summaryEl.appendChild(el);
+}
+
+// Settings controls inside ⚙ Configuration.
+function renderAcEstConfig() {
+  const group = document.getElementById('ac-est-group');
+  if (!group) return;
+  group.style.display = energyTable && weatherTable ? '' : 'none';
+  if (group.style.display === 'none') return;
+  const cfg = acEstConfig();
+  const cb = document.getElementById('ac-est-on'), sel = document.getElementById('ac-est-basement'),
+        dt = document.getElementById('ac-est-fixed');
+  cb.checked = cfg.on;
+  sel.innerHTML = '<option value="">— none (meter only) —</option>';
+  for (const c of weatherCols) if (DEFAULT_SELECTED_RE.test(c)) {
+    const o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o);
+  }
+  sel.value = acEstBasementCol(cfg);
+  dt.value = cfg.dampersFixed;
+  const apply = () => {
+    acEstSave({ on: cb.checked, basement: sel.value, dampersFixed: dt.value });
+    rebuildDataset({ keepView: true });
+  };
+  cb.onchange = sel.onchange = dt.onchange = apply;
+}
+// ══ EXPERIMENTAL: A/C run estimate from the electricity feed (end) ═══════════
+
 const THERMAL_MAX_LAG   = 24;   // hours to search for the outdoor→indoor lag
 const THERMAL_CHART_IDS = ['thermal-lag-chart', 'thermal-residual-chart',
                            'thermal-scatter-chart', 'thermal-monthly-chart'];
@@ -3528,7 +3800,7 @@ function thermalCard(summaryEl, title, stats) {
 }
 
 // One figures card per space, then a legend for what the numbers mean.
-function renderThermalSummaryCards(summaryEl, modelled, outLabel, hasSeasons, ev, measured) {
+function renderThermalSummaryCards(summaryEl, modelled, outLabel, hasSeasons, ev, measured, estimated = false) {
   for (const sp of modelled) {
     const thr = sp.res.threshold;
     thermalCard(summaryEl, `${colorDot(sp.color)} ${sp.label} vs ${outLabel}`, [
@@ -3542,7 +3814,7 @@ function renderThermalSummaryCards(summaryEl, modelled, outLabel, hasSeasons, ev
   }
 
   thermalCard(summaryEl, '📖 What this means', [
-    ['Model', measured ? 'measured HVAC state' : hasSeasons ? 'passive-season fit' : 'RANSAC estimate', ''],
+    ['Model', measured && estimated ? 'measured + estimated A/C state' : estimated ? 'estimated A/C state (meter + basement)' : measured ? 'measured HVAC state' : hasSeasons ? 'passive-season fit' : 'RANSAC estimate', ''],
     ['Lag', 'hours outdoor→indoor', ''],
     ['Coupling', 'indoor °F per outdoor °F', ''],
     ['+residual', 'heater signature', 'hvac-heat'],
@@ -3728,6 +4000,7 @@ function renderThermalScatterChart(modelled, outHr, outSmooth, ev) {
 // Event hours per month. With several spaces, colouring by heat/cool would
 // repeat across series, so each space keeps its own colour and the bar's
 // direction carries the distinction: heating counts up, cooling counts down.
+let acEstThermal = null;   // EXPERIMENTAL: what the current Thermal render took from the A/C estimate
 function renderThermalMonthlyChart(modelled, ev) {
   function monthlyHvac(res) {
     if (!res) return [];
@@ -3750,6 +4023,18 @@ function renderThermalMonthlyChart(modelled, ev) {
       type: 'bar', marker: { color: `${sp.color}cc` } });
     traces.push({ x: m.months, y: m.coolCounts, name: `${sp.label} ❄ cool`,
       type: 'bar', marker: { color: `${sp.color}55` } });
+  }
+
+  if (acEstThermal) {   // EXPERIMENTAL: estimated cooling hours, drawn hatched so they read as estimates
+    const byMonth = {};
+    for (const [h, m] of acEstThermal.modes) {
+      if (m !== 'cool' || !acEstThermal.hours.has(h)) continue;
+      const d = new Date(h), key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      byMonth[key] = (byMonth[key] || 0) - 1;
+    }
+    const months = Object.keys(byMonth).sort();
+    if (months.length) traces.push({ x: months, y: months.map(k => byMonth[k]), name: '⚡ est. A/C hours (meter + basement)',
+      type: 'bar', marker: { color: '#38bdf855', pattern: { shape: '/', fgcolor: '#38bdf8', size: 6 } } });
   }
 
   const layout = thermalLayout('Monthly HVAC activity (heat ▲ / cool ▼ event hours)', {
@@ -3785,7 +4070,21 @@ function renderThermal(filtered) {
   // A duct probe, when one is assigned and has enough readings, measures what
   // the equipment did and takes precedence over the typed season ranges.
   const detected  = roles.hvac ? detectHvacModes(filtered, roles.hvac) : null;
-  const hvacHours = hvacHourlyModes(detected);
+  const measuredHours = hvacHourlyModes(detected);
+  let hvacHours = measuredHours;
+  let acEstInfo = null, acEstData = null;
+  { // EXPERIMENTAL A/C estimate: fill hours the probe did not measure
+    const cfg = acEstConfig();
+    acEstData = cfg.on ? acEstimate(cfg) : null;
+    if (acEstData && filtered.length) {
+      acEstInfo = acEstHourlyModes(acEstData, filtered.ts[0], filtered.ts[filtered.length - 1]);
+      hvacHours = new Map(measuredHours || []);
+      acEstInfo.hours = new Set();
+      for (const [h, m] of acEstInfo.modes) if (!hvacHours.has(h)) { hvacHours.set(h, m); acEstInfo.hours.add(h); }
+      if (!acEstInfo.hours.size) { acEstInfo = null; hvacHours = measuredHours; }
+    }
+  }
+  acEstThermal = acEstInfo;
 
   const spaces = buildThermalSpaces(filtered, outHr, roles.indoor);
   for (const sp of spaces) {
@@ -3800,11 +4099,12 @@ function renderThermal(filtered) {
 
   const ev = hvacEventTests(hasSeasons || !!hvacHours);
 
-  renderThermalSummaryCards(summaryEl, modelled, stripUnit(COL_OUT), hasSeasons, ev, !!hvacHours);
+  renderThermalSummaryCards(summaryEl, modelled, stripUnit(COL_OUT), hasSeasons, ev, !!measuredHours, !!acEstInfo);
   if (detected) {
     renderHvacInterpCard(summaryEl, detected, roles.hvac,
       seriesColor(roles.hvac, columns.indexOf(roles.hvac)));
   }
+  if (acEstInfo) renderAcEstCard(summaryEl, acEstInfo, acEstData);
   renderThermalInterpCards(summaryEl, modelled, ev);
   renderThermalLagChart(modelled);
   renderThermalResidualChart(modelled, ev);
