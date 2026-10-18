@@ -1123,15 +1123,17 @@ function updateDatasetLabel() {
 // Fold the sources into one row list. A reading that lands on a timestamp the
 // other source already has joins that row; anything else becomes a row of its
 // own, which is what lets utility data from before the station existed sit on
-// the same axis. Rows are rebuilt rather than mutated so reloading one source
-// cannot leave the other's values behind.
+// the same axis. Source rows are never mutated — a shared timestamp gets a
+// new merged row — so reloading one source cannot leave the other's values
+// behind, and rows that don't collide are shared with weatherRows/energyRows
+// rather than copied (nothing downstream mutates a row; masking copies).
 function rebuildDataset() {
   const byTs = new Map();
-  for (const r of weatherRows) byTs.set(+r.ts, { ...r });
+  for (const r of weatherRows) byTs.set(+r.ts, r);
   for (const r of energyRows) {
-    const at = byTs.get(+r.ts);
-    if (at) Object.assign(at, r);
-    else byTs.set(+r.ts, { ...r });
+    const t = +r.ts;
+    const at = byTs.get(t);
+    byTs.set(t, at ? { ...at, ...r } : r);
   }
   allRows = [...byTs.values()].sort((a, b) => a.ts - b.ts);
   columns = [...weatherCols, ...energyCols.filter(c => !weatherCols.includes(c))];
@@ -1168,17 +1170,34 @@ function parseCSV(text) {
   }
 
   const headers = parseLine(lines[0]);
+
+  // Rows are built by a constructor generated for this file's header set, with
+  // every column as a literal key. Filling `row[h] = …` in a loop instead
+  // pushes each of these ~36-property objects into V8's dictionary mode, which
+  // cost ~1.6 KB a row against ~0.6 KB once all rows share one hidden class —
+  // 130k rows of station data is the bulk of the page's memory. Values are
+  // exactly what the loop produced: a number when the cell parses, else the
+  // raw cell text.
+  const num = s => { const v = parseFloat(s); return v !== v ? s : v; };
+  const keyed = [];
+  for (let j = 2; j < headers.length; j++) if (headers[j]) keyed.push(j);
+  let make = null;
+  if (!keyed.some(j => headers[j] === '__proto__')) {
+    make = new Function('ts', 'v', 'num',
+      'return { ts, ' + keyed.map(j => `${JSON.stringify(headers[j])}: num(v[${j}])`).join(', ') + ' };');
+  }
+
   const rows = [];
   for (let i = 1; i < lines.length; i++) {
     const vals = parseLine(lines[i]);
     if (vals.length < 2) continue;
     const ts = new Date(vals[0]);
     if (isNaN(ts)) continue;
-    const row = { ts };
-    for (let j = 2; j < headers.length; j++) {
-      const h = headers[j]; if (!h) continue;
-      const v = parseFloat(vals[j]);
-      row[h] = isNaN(v) ? vals[j] : v;
+    let row;
+    if (make) row = make(ts, vals, num);
+    else {
+      row = { ts };
+      for (const j of keyed) row[headers[j]] = num(vals[j]);
     }
     rows.push(row);
   }
@@ -1773,23 +1792,72 @@ function seriesGapMs(rows, col) {
   return median > 0 ? median * 3 : Infinity;
 }
 
-// First index whose ts is >= t. `rows` is always chronological (allRows is
-// sorted once in rebuildDataset and every later filter/map preserves order),
-// so decimateColumn can jump straight to the visible window instead of
-// scanning every row from the start of the dataset on every zoom/pan tick.
-function lowerBound(rows, t) {
-  let lo = 0, hi = rows.length;
+// Columnar views of a row list. Row objects carry ~36 properties each and a
+// Date, so scanning them for one series pays for all the rest; the hot loops
+// (decimation, stats) instead read a Float64Array of timestamps and one of
+// values (NaN where the reading is missing). Built lazily per series and held
+// in a WeakMap keyed on the row array itself, so replacing the rows — a new
+// date range, ignore period or dataset — drops the cache with no invalidation.
+const colCache = new WeakMap();
+function tsOf(rows) {
+  let c = colCache.get(rows);
+  if (!c) colCache.set(rows, c = { ts: null, cols: new Map() });
+  if (!c.ts) {
+    const a = new Float64Array(rows.length);
+    for (let i = 0; i < rows.length; i++) a[i] = +rows[i].ts;
+    c.ts = a;
+  }
+  return c.ts;
+}
+// One extractor per column name, generated with the name as a literal key.
+// `rows[i][col]` with a different `col` on every pass is a megamorphic keyed
+// load (~100 ns); with the name baked into the source it is a plain named
+// load, which is the difference between ~1 s and ~0.1 s to read every column
+// of two years of station data.
+const extractors = new Map();
+function extractorFor(col) {
+  let f = extractors.get(col);
+  if (!f) {
+    f = col === '__proto__'
+      ? (rows, out) => { for (let i = 0; i < rows.length; i++) { const v = rows[i][col]; out[i] = typeof v === 'number' ? v : NaN; } }
+      : new Function('rows', 'out',
+          'for (let i = 0; i < rows.length; i++) { const v = rows[i][' + JSON.stringify(col) +
+          ']; out[i] = typeof v === "number" ? v : NaN; }');
+    extractors.set(col, f);
+  }
+  return f;
+}
+function valsOf(rows, col) {
+  tsOf(rows);
+  const c = colCache.get(rows);
+  let a = c.cols.get(col);
+  if (!a) {
+    a = new Float64Array(rows.length);
+    extractorFor(col)(rows, a);
+    c.cols.set(col, a);
+  }
+  return a;
+}
+
+// First index whose timestamp is >= t. Rows are always chronological
+// (allRows is sorted once in rebuildDataset and every later filter/map
+// preserves order), so decimation can jump straight to the visible window
+// instead of scanning from the start of the dataset on every zoom/pan tick.
+function lowerBoundTs(ts, t) {
+  let lo = 0, hi = ts.length;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    if (+rows[mid].ts < t) lo = mid + 1; else hi = mid;
+    if (ts[mid] < t) lo = mid + 1; else hi = mid;
   }
   return lo;
 }
+function lowerBound(rows, t) { return lowerBoundTs(tsOf(rows), t); }
 
 function decimateColumn(rows, col, t0, t1, bins, gapMs) {
   const width = (t1 - t0) / bins;
   if (!(width > 0)) return { x: [], y: [] };
 
+  const ts = tsOf(rows), vals = valsOf(rows, col);
   const x = [], y = [];
   let binEnd = t0 + width;
   let loI = -1, hiI = -1, lo = Infinity, hi = -Infinity;
@@ -1805,18 +1873,18 @@ function decimateColumn(rows, col, t0, t1, bins, gapMs) {
     if (loI >= 0) {
       if (gapAt !== null) { x.push(new Date(gapAt)); y.push(null); gapAt = null; }
       const a = Math.min(loI, hiI), b = Math.max(loI, hiI);
-      x.push(rows[a].ts); y.push(rows[a][col]);
-      if (b !== a) { x.push(rows[b].ts); y.push(rows[b][col]); }
+      x.push(new Date(ts[a])); y.push(vals[a]);
+      if (b !== a) { x.push(new Date(ts[b])); y.push(vals[b]); }
     }
     loI = hiI = -1; lo = Infinity; hi = -Infinity;
   };
 
-  for (let i = lowerBound(rows, t0); i < rows.length; i++) {
-    const t = +rows[i].ts;
+  for (let i = lowerBoundTs(ts, t0); i < ts.length; i++) {
+    const t = ts[i];
     if (t > t1) break;
     while (t > binEnd) { flush(); binEnd += width; }
-    const v = rows[i][col];
-    if (typeof v !== 'number' || isNaN(v)) continue;
+    const v = vals[i];
+    if (v !== v) continue;
     if (lastValueT !== null && t - lastValueT > gapMs) gapAt = lastValueT + gapMs / 2;
     lastValueT = t;
     if (v < lo) { lo = v; loI = i; }
@@ -2111,9 +2179,10 @@ function updateStatsBar(filtered) {
     // as a separate argument and blows the call stack somewhere north of 100k
     // of them, which a year of 5-minute readings comfortably exceeds.
     let min = Infinity, max = -Infinity, sum = 0, n = 0;
-    for (const r of filtered) {
-      const v = r[col];
-      if (typeof v !== 'number' || isNaN(v)) continue;
+    const vals = valsOf(filtered, col);
+    for (let i = 0; i < vals.length; i++) {
+      const v = vals[i];
+      if (v !== v) continue;
       if (v < min) min = v;
       if (v > max) max = v;
       sum += v; n++;
@@ -2599,21 +2668,18 @@ function renderRecords(filtered) {
   // Clear all but header row (first 5 children)
   while (grid.children.length > 5) grid.removeChild(grid.lastChild);
 
-  const numericCols = columns.filter(col => {
-    const sample = filtered.find(r => typeof r[col] === 'number');
-    return !!sample;
-  });
-
-  for (const col of numericCols) {
+  const ts = tsOf(filtered);
+  for (const col of columns) {
     if (BATTERY_RE.test(col)) continue;   // status flag, not a measurement
-    let hiVal = -Infinity, loVal = Infinity, hiRow = null, loRow = null;
-    for (const r of filtered) {
-      const v = r[col];
-      if (typeof v !== 'number') continue;
-      if (v > hiVal) { hiVal = v; hiRow = r; }
-      if (v < loVal) { loVal = v; loRow = r; }
+    const vals = valsOf(filtered, col);
+    let hiVal = -Infinity, loVal = Infinity, hiI = -1, loI = -1;
+    for (let i = 0; i < vals.length; i++) {
+      const v = vals[i];
+      if (v !== v) continue;
+      if (v > hiVal) { hiVal = v; hiI = i; }
+      if (v < loVal) { loVal = v; loI = i; }
     }
-    if (!hiRow || !loRow) continue;
+    if (hiI < 0) continue;
 
     const cell = (txt, cls='') => {
       const d = document.createElement('div');
@@ -2621,13 +2687,13 @@ function renderRecords(filtered) {
       return d;
     };
     const fmtVal = v => Number.isInteger(v) ? v : v.toFixed(1);
-    const fmtDt  = r => r.ts.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit', hour: 'numeric', hour12: true });
+    const fmtDt  = i => new Date(ts[i]).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit', hour: 'numeric', hour12: true });
 
     grid.appendChild(cell(col, 'name'));
     grid.appendChild(cell(fmtVal(hiVal), 'hi'));
-    grid.appendChild(cell(fmtDt(hiRow), 'date'));
+    grid.appendChild(cell(fmtDt(hiI), 'date'));
     grid.appendChild(cell(fmtVal(loVal), 'lo'));
-    grid.appendChild(cell(fmtDt(loRow), 'date'));
+    grid.appendChild(cell(fmtDt(loI), 'date'));
   }
 }
 
@@ -2860,10 +2926,11 @@ document.getElementById('auto-load-btn').addEventListener('click', () =>
 function hourlyAgg(rows, col) {
   // Average readings into 1-hour buckets
   const map = new Map();
-  for (const r of rows) {
-    const v = r[col];
-    if (typeof v !== 'number') continue;
-    const key = Math.floor(r.ts.getTime() / 3_600_000);
+  const ts = tsOf(rows), vals = valsOf(rows, col);
+  for (let i = 0; i < vals.length; i++) {
+    const v = vals[i];
+    if (v !== v) continue;
+    const key = Math.floor(ts[i] / 3_600_000);
     if (!map.has(key)) map.set(key, { sum: 0, n: 0, ts: new Date(key * 3_600_000) });
     const b = map.get(key); b.sum += v; b.n++;
   }
@@ -2946,9 +3013,10 @@ const HVAC_GAP_MINUTES    = 30;   // shorter lulls are one cycling period
 // Rows carrying a probe reading, oldest first.
 function hvacSamples(filtered, col) {
   const out = [];
-  for (const r of filtered) {
-    const v = r[col];
-    if (typeof v === 'number' && !isNaN(v)) out.push({ ts: +r.ts, v });
+  const ts = tsOf(filtered), vals = valsOf(filtered, col);
+  for (let i = 0; i < vals.length; i++) {
+    const v = vals[i];
+    if (v === v) out.push({ ts: ts[i], v });
   }
   return out;
 }
