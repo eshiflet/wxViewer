@@ -2930,6 +2930,15 @@ async function loadGreenButtonDir(dirHandle) {
 
 // Shared by both folder buttons: reuse the remembered folder when its
 // permission still stands, otherwise ask for one.
+// A remembered folder can stop existing — moved, renamed, deleted — while its
+// handle keeps passing the permission check, and the failure only surfaces
+// later, mid-load, as "A requested file or directory could not be found".
+// Listing it is the cheapest way to find out up front.
+async function folderStillExists(handle) {
+  try { for await (const _ of handle.values()) break; return true; }
+  catch (e) { if (e.name === 'NotFoundError') return false; throw e; }
+}
+
 async function pickAndLoadFolder({ key, button, load, waiting }) {
   if (!window.showDirectoryPicker) {
     fileStatus.textContent = 'Directory picker not supported in this browser — use "Load CSV files" instead';
@@ -2939,15 +2948,23 @@ async function pickAndLoadFolder({ key, button, load, waiting }) {
   await sleep(0);
   try {
     let dirHandle = await getStoredDirHandle(key);
+    let moved = false;
     if (dirHandle) {
       const perm = await dirHandle.queryPermission({ mode: 'read' });
       if (perm !== 'granted') {
         const req = await dirHandle.requestPermission({ mode: 'read' });
         if (req !== 'granted') dirHandle = null;
       }
+      if (dirHandle && !(await folderStillExists(dirHandle))) { dirHandle = null; moved = true; }
     }
     if (!dirHandle) {
-      dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+      // A moved folder most likely went somewhere nearby; start at the Desktop
+      // rather than wherever the browser last was.
+      showLoading(false);
+      if (moved) fileStatus.textContent = 'The remembered folder was moved or deleted — choose it again';
+      dirHandle = await window.showDirectoryPicker({ mode: 'read', ...(moved ? { startIn: 'desktop' } : {}) });
+      fileStatus.textContent = '';
+      showLoading(true, waiting);
       await storeDirHandle(dirHandle, key);
     }
     await load(dirHandle);
@@ -2978,7 +2995,13 @@ document.getElementById('auto-load-btn').addEventListener('click', () =>
     const dirHandle = await getStoredDirHandle(key);
     if (!dirHandle) continue;
     const perm = await dirHandle.queryPermission({ mode: 'read' });
-    if (perm === 'granted') {
+    if (perm === 'granted' && !(await folderStillExists(dirHandle))) {
+      // Moved or deleted since last visit — say so on the button, like a
+      // permission lapse, instead of failing quietly.
+      const btn = document.getElementById(id);
+      btn.textContent = label.replace(/^(\S+) /, '$1 Locate ');
+      btn.title = 'The remembered folder was moved or deleted — click to choose it again';
+    } else if (perm === 'granted') {
       showLoading(true, `Reloading ${label.slice(2)}…`);
       await sleep(0);
       try { await load(dirHandle); } catch { showLoading(false); }
