@@ -1989,6 +1989,9 @@ function renderChart() {
   const selected  = columns.filter(c => checkedCols.has(c));
   const rightCols = selected.filter(usesRightAxis);
   const useRight  = rightCols.length > 0 && rightCols.length < selected.length;
+  const energyOnly = rightCols.length > 0 && rightCols.length === selected.length;
+  const energyAxis = useRight ? 'yaxis2' : (energyOnly ? 'yaxis' : null);
+  const energyTickFormat = energyTickDecimals === null ? {} : { tickformat: `.${energyTickDecimals}f` };
   const rightUnit = rightCols.length ? unitOf(rightCols[0]) : '';
   const rightTint = rightCols.length ? seriesColor(rightCols[0], columns.indexOf(rightCols[0])) : PLOT_TEXT;
 
@@ -2108,6 +2111,7 @@ function renderChart() {
     },
     yaxis: {
       gridcolor: PLOT_GRID, linecolor: PLOT_GRID, tickcolor: PLOT_GRID, zeroline: false,
+      ...(!useRight && energyOnly ? energyTickFormat : {}),
     },
     // Tinted to its series and drawn without gridlines: two sets of horizontal
     // lines at different scales read as noise, and the left grid is the one
@@ -2115,13 +2119,14 @@ function renderChart() {
     ...(useRight ? { yaxis2: {
       title: { text: rightUnit, font: { color: rightTint, size: 11 }, standoff: 6 },
       overlaying: 'y', side: 'right',
-      // No explicit tickformat. Energy spans a wide range of magnitudes —
-      // around 2 kWh across two years, a twentieth of that within a day — and
-      // a fixed one decimal turns every tick on a zoomed-in day into "0.1".
-      // Plotly picks the precision from the range, which is what adapts.
+      // The tick format is not fixed: energy spans ~2 kWh across two years and
+      // a twentieth of that within a day, so a fixed one decimal turns every
+      // tick on a zoomed-in day into "0.1". It follows the spacing Plotly
+      // picks for the visible range instead — see fitEnergyTicks.
       showgrid: false, zeroline: false,
       linecolor: PLOT_GRID, tickcolor: PLOT_GRID,
       tickfont: { color: rightTint },
+      ...energyTickFormat,
     } } : {}),
     hovermode: 'x unified',
     hoverlabel: { bgcolor: PLOT_PANEL, bordercolor: PLOT_GRID, font: { color: PLOT_TEXT, size: 11 } },
@@ -2134,9 +2139,10 @@ function renderChart() {
     toImageButtonOptions: { format: 'png', scale: 2 },
   };
 
-  if (chartRendered) Plotly.react(chartEl, traces, layout, config);
+  let plotted;
+  if (chartRendered) plotted = Plotly.react(chartEl, traces, layout, config);
   else {
-    Plotly.newPlot(chartEl, traces, layout, config);
+    plotted = Plotly.newPlot(chartEl, traces, layout, config);
     chartRendered = true;
 
     // Zoom and pan change which window is on screen, so redraw it at the
@@ -2165,6 +2171,9 @@ function renderChart() {
     // Sync analysis panel when user drag-zooms or double-click resets the chart
     chartEl.on('plotly_relayout', evt => {
       if (!analysisPanel.classList.contains('visible')) return;
+      // A relayout that never touched the x-axis (a resize, a tick format) is
+      // not a zoom or a reset, and must not clear the date range.
+      if (!Object.keys(evt).some(k => k.startsWith('xaxis'))) return;
       const x0 = evt['xaxis.range[0]'];
       const x1 = evt['xaxis.range[1]'];
       if (x0 && x1) {
@@ -2180,7 +2189,28 @@ function renderChart() {
     });
   }
 
+  if (energyAxis) plotted.then(() => fitEnergyTicks(energyAxis));
   updateStatsBar(filtered);
+}
+
+// Plotly drops trailing zeros, so a run of ticks at 0.5 spacing reads
+// "0, 0.5, 1, 1.5" — whole numbers losing the decimal their neighbours keep.
+// Once it has chosen a spacing for the visible range, give every tick the
+// number of decimals that spacing needs: "0.0, 0.5, 1.0, 1.5", or "0.10, 0.15,
+// 0.20" at a spacing of 0.05. The format is remembered so the next redraw
+// starts from it, and only changed when the range calls for a different one.
+// _fullLayout is where Plotly keeps the spacing it settled on; there is no
+// public hook for it.
+let energyTickDecimals = null;
+function fitEnergyTicks(axisName) {
+  const ax = chartEl._fullLayout && chartEl._fullLayout[axisName];
+  const dtick = ax ? +ax.dtick : NaN;
+  if (!(dtick > 0)) return;
+  let d = 0;
+  while (d < 6 && Math.abs(dtick * 10 ** d - Math.round(dtick * 10 ** d)) > 1e-9) d++;
+  if (d === energyTickDecimals && ax.tickformat === `.${d}f`) return;
+  energyTickDecimals = d;
+  Plotly.relayout(chartEl, { [axisName + '.tickformat']: `.${d}f` });
 }
 
 // The chips describe the visible window, which a zoom or pan does not change,
