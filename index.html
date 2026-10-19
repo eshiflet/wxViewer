@@ -3439,8 +3439,9 @@ function hvacRuns(detected) {
 }
 
 // ══ EXPERIMENTAL: A/C run estimate from the electricity feed (begin) ══════════
-// For stretches with no supply-duct probe: say when the A/C probably ran from
-// the meter's load, sharpened — while a zone's dampers were stuck open — by how
+// Where a supply-duct probe has readings it decides (its temperature drop is a
+// measurement). For stretches with no probe: say when the A/C probably ran from
+// the meter's load (with dryer-sized loads set aside as not-the-compressor), sharpened — while a zone's dampers were stuck open — by how
 // the basement temperature was trending (it chills fast whenever the compressor
 // runs). OFF by default; switched on in ⚙ Configuration. To remove the whole
 // experiment, delete everything between this banner and the matching "(end)"
@@ -3458,9 +3459,16 @@ const AC_EST_KEY   = 'wxviewer-ac-estimate';
 const AC_EST_COL   = 'A/C probability (est.)';
 const AC_EST_MODEL = {
   kwEdges:    [0.15, 0.3, 0.45, 0.6, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 3.0, 3.5, 4.5],   // kW above idle
-  kwLlr:      [-3.112, -1.27, -0.278, 0.424, 1.721, 1.92, 2.712, 2.941, 4.716, 4.656, 2.489, 3.859, 2.529, 1.003, -0.019, -0.355],
+  // Rows: kW over idle; columns: how much the load moves across three intervals (a compressor
+  // plateaus, a washer or dryer jumps about).
+  rngEdges:   [0.5, 1.0, 2.0],
+  kwLlr2d:    [[-2.834, 0.97, 2.092, 1.329], [-1.908, 1.983, 1.329, 1.329], [-0.353, 1.64, 0.106, -0.28], [0.116, 1.329, 2.939, 0.231], [1.129, 2.592, 1.84, -0.616], [1.765, 3.21, 2.939, -0.616], [1.781, 2.701, 3.175, 2.428], [4.826, 2.994, 1.965, 1.329], [6.447, 3.727, 2.177, 0.819], [6.32, 4.94, 2.629, -0.616], [4.274, 2.428, 2.428, -0.868], [4.274, 3.275, 1.84, 1.329], [3.527, 3.727, 1.84, 0.819], [1.329, 1.329, 0.482, 1.329], [2.428, 1.329, 0.482, 0.374], [1.329, 1.329, 1.329, -0.616]],
+  dryerKw:    3.2,       // this far over idle is a dryer's heating element (A/C alone tops out near 2.9 kW): the load says nothing
+  clampLlr:   5,
+  // A duct-probe reading is a measurement and decides; the meter only nudges.
+  trunkWeight: 12, meterWeightWithTrunk: 0.3, trunkDropF: 5, trunkIdleHalfH: 6, trunkIdleQ: 0.85,
   outEdges:   [40, 50, 60, 70, 80, 90],                                                            // outdoor °F
-  outLlr:     [-2.795, -4.793, -0.756, -0.648, 1.07, 2.524, 1.599],
+  outLlr:     [-3.025, -5.023, -0.84, -0.543, 1.1, 2.989, 1.369],
   outWeight:  0.7,
   slopeEdges: [-0.6, -0.35, -0.15, 0.0, 0.15, 0.3],                                                // basement °F/hour
   slopeLlr:   [3.0, 2.501, 0.474, -1.562, -3.0, -3.0, -3.0],
@@ -3491,6 +3499,13 @@ function acEstOutdoorCol() {
   const saved = loadThermalSensors();
   if (saved && weatherCols.includes(saved.outdoor)) return saved.outdoor;
   return guessThermalSensors(weatherCols).outdoor;
+}
+
+function acEstTrunkCol() {
+  const saved = loadThermalSensors();
+  if (saved) return weatherCols.includes(saved.hvac) ? saved.hvac : '';
+  const out = acEstOutdoorCol();
+  return weatherCols.find(c => c !== out && DEFAULT_SELECTED_RE.test(c) && HVAC_SENSOR_RE.test(c)) || '';
 }
 
 function acBin(edges, x) { let i = 0; while (i < edges.length && x >= edges[i]) i++; return i; }
@@ -3526,12 +3541,15 @@ function acEstimate(cfg) {
   const e = energyTable, w = weatherTable;
   const kwh = e && e.cols.get(GB_ENERGY_COL);
   if (!kwh || !w || !e.n) return null;
-  const outCol = acEstOutdoorCol(), basCol = acEstBasementCol(cfg);
-  const key = [e, w, outCol, basCol, cfg.dampersFixed];
+  const outCol = acEstOutdoorCol(), basCol = acEstBasementCol(cfg), trkCol = acEstTrunkCol();
+  const key = [e, w, outCol, basCol, trkCol, cfg.dampersFixed];
   if (acEstCache && acEstCache.key.every((k, i) => k === key[i])) return acEstCache.est;
 
   const M = AC_EST_MODEL, n = e.n, STEP = 900000;
-  const out = outCol ? w.cols.get(outCol) : null, bas = basCol ? w.cols.get(basCol) : null;
+  const out = outCol ? w.cols.get(outCol) : null, bas = basCol ? w.cols.get(basCol) : null, trk = trkCol ? w.cols.get(trkCol) : null;
+  // weather rows that carry a probe reading, for the probe's own idle level
+  const trkRows = []; if (trk) for (let k = 0; k < w.n; k++) if (trk[k] === trk[k]) trkRows.push(k);
+  let tlo = 0, thi = 0;
   const fixMs = cfg.dampersFixed ? new Date(cfg.dampersFixed + 'T00:00:00').getTime() : -Infinity;
 
   // Zero-load runs of two or more intervals are outages (and the meter is
@@ -3548,7 +3566,7 @@ function acEstimate(cfg) {
   const U = []; for (let i = 0; i < n; i++) if (usable[i]) U.push(i);
 
   const p = new Float64Array(n).fill(NaN), pMeter = new Float64Array(n).fill(NaN);
-  const slopeUsed = new Uint8Array(n);
+  const slopeUsed = new Uint8Array(n), trunkUsed = new Uint8Array(n);
   const llrM = new Float64Array(n), llrF = new Float64Array(n);
   const wn = w.n; let wlo = 0, whi = 0, slo = 0, shi = 0;
   for (let u = 0; u < U.length; u++) {
@@ -3558,7 +3576,11 @@ function acEstimate(cfg) {
     for (let k = Math.max(0, u - M.idleHalf); k <= Math.min(U.length - 1, u + M.idleHalf); k++) win.push(kwh[U[k]] * 4);
     win.sort((x, y) => x - y);
     const idle = win[Math.floor(win.length * M.idleQ)];
-    let l = M.kwLlr[acBin(M.kwEdges, kw - idle)];
+    // how much the load moves across this and the two neighbouring intervals
+    const pv = i > 0 && e.ts[i] - e.ts[i - 1] === STEP ? kwh[i - 1] * 4 : NaN, nx = i + 1 < n && e.ts[i + 1] - e.ts[i] === STEP ? kwh[i + 1] * 4 : NaN;
+    const rng = pv === pv && nx === nx ? Math.max(pv, kw, nx) - Math.min(pv, kw, nx) : 0.75;
+    let l = kw - idle >= M.dryerKw ? 0
+          : Math.max(-M.clampLlr, Math.min(M.clampLlr, M.kwLlr2d[acBin(M.kwEdges, kw - idle)][acBin(M.rngEdges, rng)]));
 
     // mean outdoor over this interval
     while (wlo < wn && w.ts[wlo] < t) wlo++;
@@ -3569,6 +3591,26 @@ function acEstimate(cfg) {
     if (no) l += M.outWeight * M.outLlr[acBin(M.outEdges, so / no)];
     llrM[i] = l;
     llrF[i] = l;
+
+    // duct probe: the share of this interval's readings well below the probe's own idle level
+    if (trkRows.length) {
+      while (tlo < trkRows.length && w.ts[trkRows[tlo]] < t) tlo++;
+      if (thi < tlo) thi = tlo;
+      while (thi < trkRows.length && w.ts[trkRows[thi]] < t + STEP) thi++;
+      if (thi - tlo >= 2) {
+        const half = M.trunkIdleHalfH * 3600000;
+        let a = tlo, b = thi;
+        while (a > 0 && w.ts[trkRows[a - 1]] >= t - half) a--;
+        while (b < trkRows.length && w.ts[trkRows[b]] <= t + half) b++;
+        const ref = []; for (let k = a; k < b; k++) ref.push(trk[trkRows[k]]);
+        ref.sort((x, y) => x - y);
+        const base = ref[Math.min(ref.length - 1, Math.floor(ref.length * M.trunkIdleQ))];
+        let cold = 0; for (let k = tlo; k < thi; k++) if (base - trk[trkRows[k]] > M.trunkDropF) cold++;
+        llrF[i] = M.trunkWeight * (cold / (thi - tlo) - 0.5) + M.meterWeightWithTrunk * l;
+        slopeUsed[i] = 0; trunkUsed[i] = 1;
+        continue;
+      }
+    }
 
     // basement trend over t-30..t+45 min, only while the dampers were stuck
     if (bas && t < fixMs) {
@@ -3600,7 +3642,7 @@ function acEstimate(cfg) {
       while (a < wn && w.ts[a] < t) a++; if (b < a) b = a; while (b < wn && w.ts[b] < t + STEP) b++;
       let s = 0, c = 0; for (let k = a; k < b; k++) { const v = out[k]; if (v === v) { s += v; c++; } }
       if (c) outMean[i] = s / c; } }
-  const est = { ts: e.ts, p, pMeter, slopeUsed, outMean, basCol, outCol, dampersFixed: cfg.dampersFixed };
+  const est = { ts: e.ts, p, pMeter, slopeUsed, trunkUsed, trkCol, outMean, basCol, outCol, dampersFixed: cfg.dampersFixed };
   acEstCache = { key, est };
   return est;
 }
