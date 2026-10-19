@@ -836,6 +836,11 @@
                 <div class="sensor-hint">Cold-air leak shows up as a fast temperature fall while the compressor runs.</div>
               </div>
               <div class="season-group">
+                <div class="season-group-title hvac">📅 Months the A/C can run</div>
+                <div style="display:flex;gap:6px;align-items:center"><select class="sensor-select" id="ac-est-from"></select><span class="sensor-hint">to</span><select class="sensor-select" id="ac-est-to"></select></div>
+                <div class="sensor-hint">Outside these months the A/C is taken as off. Needed where no weather data exists, since load alone can't rule out a furnace blower.</div>
+              </div>
+              <div class="season-group">
                 <div class="season-group-title hvac">🔧 Basement dampers fixed on</div>
                 <input type="date" class="sensor-select" id="ac-est-fixed">
                 <div class="sensor-hint">Before this date the basement chills fast whenever the compressor runs; after it the response is weaker, so a gentler calibration is used. Clear it if the dampers were never stuck.</div>
@@ -3462,7 +3467,7 @@ const AC_EST_MODEL = {
   // Rows: kW over idle; columns: how much the load moves across three intervals (a compressor
   // plateaus, a washer or dryer jumps about).
   rngEdges:   [0.5, 1.0, 2.0],
-  kwLlr2d:    [[-2.767, 1.081, 1.733, -0.0], [-1.829, 1.924, 1.122, -0.0], [-0.28, 1.418, 0.345, -0.0], [0.099, 1.303, 1.47, -0.348], [1.061, 2.432, 1.122, -0.0], [1.542, 3.093, 1.47, -0.0], [1.231, 2.778, 2.429, -0.0], [3.325, 2.628, 1.563, -0.0], [4.942, 2.915, 1.796, -0.348], [4.814, 3.439, 2.041, -0.348], [2.777, -0.0, 1.47, -0.0], [2.777, 1.796, -0.0, -0.0], [1.796, 1.796, 0.636, -0.348], [-0.0, -0.0, -0.0, -0.0], [-0.0, -0.0, -0.0, -0.0], [-0.0, -0.0, -0.0, -0.0]],
+  kwLlr2d:    [[-2.227, 0.456, -0.053, -1.496], [-1.99, 0.942, -0.727, -0.712], [-0.752, 0.862, -0.593, -1.005], [-0.663, 0.955, -0.119, -1.005], [-0.611, 2.112, -0.779, -0.869], [-0.209, 2.184, -0.573, -0.297], [-1.409, 1.998, 0.483, -0.869], [-0.77, 1.103, 0.069, -1.005], [1.895, 1.603, 0.049, -0.869], [2.853, 2.291, 0.996, -1.005], [2.16, -2.193, 0.627, -1.005], [2.687, 1.612, -1.979, -1.231], [1.99, 1.494, 0.263, -1.415], [0.0, -0.526, -1.124, -0.526], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
   dryerKw:    3.2,       // this far over idle is a dryer's heating element (A/C alone tops out near 2.9 kW)
   dryerZone:  3,         // ...and the load within this many intervals either side says nothing about the compressor: only temperatures decide there
   clampLlr:   5,
@@ -3489,7 +3494,8 @@ function acEstConfig() {
   let c = null;
   try { c = JSON.parse(localStorage.getItem(AC_EST_KEY)); } catch { /* none saved */ }
   c = c || acEstMem || {};
-  return { on: !!c.on, basement: c.basement || '', dampersFixed: c.dampersFixed ?? '2026-06-01' };
+  return { on: !!c.on, basement: c.basement || '', dampersFixed: c.dampersFixed ?? '2026-06-01',
+           fromMonth: +c.fromMonth || 5, toMonth: +c.toMonth || 10 };   // months of the year the A/C can run (1-12, inclusive; wraps if from > to)
 }
 function acEstSave(cfg) {
   acEstMem = cfg;
@@ -3546,7 +3552,7 @@ function acEstimate(cfg) {
   const kwh = e && e.cols.get(GB_ENERGY_COL);
   if (!kwh || !w || !e.n) return null;
   const outCol = acEstOutdoorCol(), basCol = acEstBasementCol(cfg), trkCol = acEstTrunkCol();
-  const key = [e, w, outCol, basCol, trkCol, cfg.dampersFixed];
+  const key = [e, w, outCol, basCol, trkCol, cfg.dampersFixed, cfg.fromMonth, cfg.toMonth];
   if (acEstCache && acEstCache.key.every((k, i) => k === key[i])) return acEstCache.est;
 
   const M = AC_EST_MODEL, n = e.n, STEP = 900000;
@@ -3554,6 +3560,7 @@ function acEstimate(cfg) {
   // weather rows that carry a probe reading, for the probe's own idle level
   const trkRows = []; if (trk) for (let k = 0; k < w.n; k++) if (trk[k] === trk[k]) trkRows.push(k);
   let tlo = 0, thi = 0;
+  const inSeason = m => cfg.fromMonth <= cfg.toMonth ? m >= cfg.fromMonth && m <= cfg.toMonth : m >= cfg.fromMonth || m <= cfg.toMonth;
   const fixMs = cfg.dampersFixed ? new Date(cfg.dampersFixed + 'T00:00:00').getTime() : -Infinity;
 
   // Zero-load runs of two or more intervals are outages (and the meter is
@@ -3601,6 +3608,7 @@ function acEstimate(cfg) {
     if (out) for (let k = wlo; k < whi; k++) { const v = out[k]; if (v === v) { so += v; no++; } }
     if (no && !dz[i]) l += M.outWeight * M.outLlr[acBin(M.outEdges, so / no)];
     if (no && so / no < M.coldGateF) l = -12;
+    if (!inSeason(new Date(t).getMonth() + 1)) l = -12;     // outside the months the A/C can run (set in Configuration)
     llrM[i] = l;
     llrF[i] = l;
 
@@ -3753,6 +3761,11 @@ function renderAcEstConfig() {
   const cb = document.getElementById('ac-est-on'), sel = document.getElementById('ac-est-basement'),
         dt = document.getElementById('ac-est-fixed');
   cb.checked = cfg.on;
+  const fromSel = document.getElementById('ac-est-from'), toSel = document.getElementById('ac-est-to');
+  if (!fromSel.options.length) for (const sel2 of [fromSel, toSel]) for (let m = 1; m <= 12; m++) {
+    const o = document.createElement('option'); o.value = m; o.textContent = new Date(2000, m - 1, 1).toLocaleString(undefined, { month: 'long' }); sel2.appendChild(o);
+  }
+  fromSel.value = cfg.fromMonth; toSel.value = cfg.toMonth;
   sel.innerHTML = '<option value="">— none (meter only) —</option>';
   for (const c of weatherCols) if (DEFAULT_SELECTED_RE.test(c)) {
     const o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o);
@@ -3760,10 +3773,10 @@ function renderAcEstConfig() {
   sel.value = acEstBasementCol(cfg);
   dt.value = cfg.dampersFixed;
   const apply = () => {
-    acEstSave({ on: cb.checked, basement: sel.value, dampersFixed: dt.value });
+    acEstSave({ on: cb.checked, basement: sel.value, dampersFixed: dt.value, fromMonth: +fromSel.value, toMonth: +toSel.value });
     rebuildDataset({ keepView: true });
   };
-  cb.onchange = sel.onchange = dt.onchange = apply;
+  cb.onchange = sel.onchange = dt.onchange = fromSel.onchange = toSel.onchange = apply;
 }
 // ══ EXPERIMENTAL: A/C run estimate from the electricity feed (end) ═══════════
 
