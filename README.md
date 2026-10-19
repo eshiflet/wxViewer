@@ -50,7 +50,8 @@ the tab controls two things:
 - **Heating / cooling seasons** — whole-day ranges saying which mode the HVAC was in. These
   are labels about mode, not runtime; working out when it actually ran inside those days is
   the model's job. Given them, the regression trains on labelled ground truth instead of the
-  built-in RANSAC estimator
+  built-in RANSAC estimator. A period that is still going on can end at **present** instead of a
+  date, so it keeps covering new data as it arrives
 - **Sensor roles** — which channels are indoor spaces and which one is the outdoor reference.
   Each indoor sensor is modelled separately. Unset, the app guesses from the column names
 

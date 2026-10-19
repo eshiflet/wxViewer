@@ -579,6 +579,8 @@
     color: var(--text); padding: 3px 6px; font-size: 11px; width: 120px;
   }
   .season-range-row span { color: var(--muted); }
+  .season-range-row input[type=date]:disabled { opacity: 0.35; }
+  .season-range-row label.season-present { display: flex; align-items: center; gap: 3px; color: var(--muted); cursor: pointer; white-space: nowrap; }
   .season-remove {
     background: none; border: none; color: var(--muted); cursor: pointer;
     font-size: 14px; padding: 0 4px; line-height: 1;
@@ -2587,6 +2589,9 @@ function renderSensorConfig() {
 // ── Heating / cooling seasons ───────────────────────────────────────────
 const SEASON_KEY = 'weather_season_config';
 
+// A period's end can be this instead of a date: it is still going on, so it runs to the latest data.
+const SEASON_PRESENT = 'present';
+
 function loadSeasonConfig() {
   try { return JSON.parse(localStorage.getItem(SEASON_KEY)) || { heat: [], cool: [] }; }
   catch { return { heat: [], cool: [] }; }
@@ -2605,10 +2610,10 @@ function saveSeasonConfig(cfg) {
 function classifyDate(ts, cfg) {
   const d = toLocalDate(ts);
   for (const [from, to] of cfg.heat) {
-    if (from && to && d >= from && d <= to) return 'heat';
+    if (from && to && d >= from && (to === SEASON_PRESENT || d <= to)) return 'heat';
   }
   for (const [from, to] of cfg.cool) {
-    if (from && to && d >= from && d <= to) return 'cool';
+    if (from && to && d >= from && (to === SEASON_PRESENT || d <= to)) return 'cool';
   }
   return 'passive';
 }
@@ -2626,7 +2631,8 @@ function renderSeasonUI() {
       row.innerHTML = `
         <input type="date" value="${from}" data-type="${type}" data-idx="${idx}" data-field="from">
         <span>→</span>
-        <input type="date" value="${to}" data-type="${type}" data-idx="${idx}" data-field="to">
+        <input type="date" value="${to === SEASON_PRESENT ? '' : to}" data-type="${type}" data-idx="${idx}" data-field="to"${to === SEASON_PRESENT ? ' disabled' : ''}>
+        <label class="season-present" title="This period is still going on: it runs to whatever the latest data is"><input type="checkbox" data-type="${type}" data-idx="${idx}" data-field="present"${to === SEASON_PRESENT ? ' checked' : ''}>present</label>
         <button class="season-remove" data-type="${type}" data-idx="${idx}">×</button>`;
       container.appendChild(row);
     });
@@ -2643,7 +2649,12 @@ function renderSeasonUI() {
   body.oninput = e => {
     const { type, idx, field } = e.target.dataset;
     if (!type) return;
-    cfg[type][idx][field === 'from' ? 0 : 1] = e.target.value;
+    if (field === 'present') {
+      cfg[type][idx][1] = e.target.checked ? SEASON_PRESENT : '';
+      renderRanges(type + '-ranges', type);       // re-draw so the end date greys out / comes back
+    } else {
+      cfg[type][idx][field === 'from' ? 0 : 1] = e.target.value;
+    }
     saveSeasonConfig(cfg);
     updatePassiveInfo(cfg);
     updateSeasonSummary(cfg);
@@ -3562,7 +3573,7 @@ function acEstimate(cfg) {
   // weather rows that carry a probe reading, for the probe's own idle level
   const trkRows = []; if (trk) for (let k = 0; k < w.n; k++) if (trk[k] === trk[k]) trkRows.push(k);
   let tlo = 0, thi = 0;
-  const inSeason = t => { if (!coolRanges.length) return true; const d = toLocalDate(new Date(t)); return coolRanges.some(([f, to]) => d >= f && d <= to); };
+  const inSeason = t => { if (!coolRanges.length) return true; const d = toLocalDate(new Date(t)); return coolRanges.some(([f, to]) => d >= f && (to === SEASON_PRESENT || d <= to)); };
   const fixMs = cfg.dampersFixed ? new Date(cfg.dampersFixed + 'T00:00:00').getTime() : -Infinity;
 
   // Zero-load runs of two or more intervals are outages (and the meter is
