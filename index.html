@@ -3462,19 +3462,21 @@ const AC_EST_MODEL = {
   // Rows: kW over idle; columns: how much the load moves across three intervals (a compressor
   // plateaus, a washer or dryer jumps about).
   rngEdges:   [0.5, 1.0, 2.0],
-  kwLlr2d:    [[-2.786, 0.952, 1.718, -0.0], [-1.858, 1.781, 0.852, -0.0], [-0.331, 1.403, -0.009, -0.607], [0.083, 1.186, 1.459, -0.349], [0.901, 2.416, 1.11, -0.812], [1.526, 2.907, 1.459, -0.812], [1.413, 2.548, 2.415, 0.975], [3.311, 2.613, 1.671, 0.626], [4.927, 2.962, 1.435, 0.368], [4.8, 3.425, 1.876, -0.812], [2.764, 0.975, 1.68, -0.982], [2.764, 1.784, 1.11, -0.0], [2.029, 2.225, 1.11, 0.368], [-0.0, -0.0, 0.163, 0.626], [0.975, -0.0, 0.163, 0.205], [-0.0, -0.0, -0.0, -0.812]],
+  kwLlr2d:    [[-2.767, 1.081, 1.733, -0.0], [-1.829, 1.924, 1.122, -0.0], [-0.28, 1.418, 0.345, -0.0], [0.099, 1.303, 1.47, -0.348], [1.061, 2.432, 1.122, -0.0], [1.542, 3.093, 1.47, -0.0], [1.231, 2.778, 2.429, -0.0], [3.325, 2.628, 1.563, -0.0], [4.942, 2.915, 1.796, -0.348], [4.814, 3.439, 2.041, -0.348], [2.777, -0.0, 1.47, -0.0], [2.777, 1.796, -0.0, -0.0], [1.796, 1.796, 0.636, -0.348], [-0.0, -0.0, -0.0, -0.0], [-0.0, -0.0, -0.0, -0.0], [-0.0, -0.0, -0.0, -0.0]],
   dryerKw:    3.2,       // this far over idle is a dryer's heating element (A/C alone tops out near 2.9 kW)
   dryerZone:  3,         // ...and the load within this many intervals either side says nothing about the compressor: only temperatures decide there
   clampLlr:   5,
   // A duct-probe reading is a measurement and decides; the meter only nudges.
   trunkWeight: 12, meterWeightWithTrunk: 0.3, trunkDropF: 5, trunkIdleHalfH: 6, trunkIdleQ: 0.85,
   outEdges:   [40, 50, 60, 70, 80, 90],                                                            // outdoor °F
-  outLlr:     [-3.26, -5.235, -0.839, -0.54, 1.101, 2.938, 0.0],
+  outLlr:     [-3.257, -5.231, -0.78, -0.654, 1.14, 2.936, 0.0],
   outWeight:  0.7,
-  slopeEdges: [-0.6, -0.35, -0.15, 0.0, 0.15, 0.3],                                                // basement °F/hour
-  slopeLlr:   [3.0, 2.473, 0.465, -1.602, -3.0, -3.0, -3.0],       // dampers stuck open: a strong, fast drop
-  slopePostLlr: [0.0, 3.0, 2.281, 0.594, -1.15, -1.508, -1.262],  // after the repair: weaker, fitted on probe-labelled intervals
+  slopeEdges: [-0.6, -0.35, -0.15, -0.05, 0.05, 0.15, 0.3],                                                // basement °F/hour
+  slopeLlr:   [3.0, 2.473, 0.465, -1.139, -3.0, -3.0, -3.0, -3.0],       // dampers stuck open: a strong, fast drop
+  slopePostLlr: [0.0, 3.0, 2.28, 0.869, -0.839, -2.241, -1.463, -0.883],  // after the repair: weaker, fitted on probe-labelled intervals
   slopeWeight: 0.8,
+  slopeWeightPost: 2.0,  // the repaired basement is a weaker, noisier witness but a flat or rising trend reliably rules the A/C out
+  coldGateF:  48,        // no compressor runs below this outdoor temperature (none seen in the probe data)
   stay:       0.8,       // chance the state carries over to the next 15 minutes
   idleHalf:   24,        // intervals either side for the idle-load reference
   idleQ:      0.15,
@@ -3598,6 +3600,7 @@ function acEstimate(cfg) {
     let so = 0, no = 0;
     if (out) for (let k = wlo; k < whi; k++) { const v = out[k]; if (v === v) { so += v; no++; } }
     if (no && !dz[i]) l += M.outWeight * M.outLlr[acBin(M.outEdges, so / no)];
+    if (no && so / no < M.coldGateF) l = -12;
     llrM[i] = l;
     llrF[i] = l;
 
@@ -3631,7 +3634,7 @@ function acEstimate(cfg) {
       if (n2 >= 8 && hi - lo < 15) {
         const mx = sx / n2, my = sy / n2; let sxy = 0, sxx = 0;
         for (let k = slo; k < shi; k++) { const v = bas[k]; if (v === v) { const dx = (w.ts[k] - t) / 3600000 - mx; sxy += dx * (v - my); sxx += dx * dx; } }
-        if (sxx > 0) { llrF[i] += M.slopeWeight * (t < fixMs ? M.slopeLlr : M.slopePostLlr)[acBin(M.slopeEdges, sxy / sxx)]; slopeUsed[i] = 1; }
+        if (sxx > 0) { llrF[i] += (t < fixMs ? M.slopeWeight : M.slopeWeightPost) * (t < fixMs ? M.slopeLlr : M.slopePostLlr)[acBin(M.slopeEdges, sxy / sxx)]; slopeUsed[i] = 1; }
       }
     }
   }
