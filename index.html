@@ -827,18 +827,14 @@
                 <div class="sensor-hint">
                   For stretches with no HVAC probe: meter load, plus the basement trend while its
                   zone dampers were stuck open. Adds an “A/C probability (est.)” series and fills in
-                  the thermal model's idle/cooling hours. Hours with a probe reading are never overridden.
+                  the thermal model's idle/cooling hours. Hours with a probe reading are never overridden. If you define
+                  <b>Cooling Active</b> periods above, the A/C is taken as off outside them.
                 </div>
               </div>
               <div class="season-group">
                 <div class="season-group-title hvac">🏠 Basement sensor</div>
                 <select class="sensor-select" id="ac-est-basement"></select>
                 <div class="sensor-hint">Cold-air leak shows up as a fast temperature fall while the compressor runs.</div>
-              </div>
-              <div class="season-group">
-                <div class="season-group-title hvac">📅 Months the A/C can run</div>
-                <div style="display:flex;gap:6px;align-items:center"><select class="sensor-select" id="ac-est-from"></select><span class="sensor-hint">to</span><select class="sensor-select" id="ac-est-to"></select></div>
-                <div class="sensor-hint">Outside these months the A/C is taken as off. Needed where no weather data exists, since load alone can't rule out a furnace blower.</div>
               </div>
               <div class="season-group">
                 <div class="season-group-title hvac">🔧 Basement dampers fixed on</div>
@@ -2651,6 +2647,7 @@ function renderSeasonUI() {
     saveSeasonConfig(cfg);
     updatePassiveInfo(cfg);
     updateSeasonSummary(cfg);
+    if (acEstConfig().on) { rebuildDataset({ keepView: true }); return; }   // the A/C estimate follows the Cooling Active periods
     if (analysisPanel.classList.contains('visible')) renderActiveView();
   };
   body.onclick = e => {
@@ -2669,6 +2666,7 @@ function renderSeasonUI() {
     renderRanges('cool-ranges', 'cool');
     updatePassiveInfo(cfg);
     updateSeasonSummary(cfg);
+    if (acEstConfig().on) { rebuildDataset({ keepView: true }); return; }
     if (analysisPanel.classList.contains('visible')) renderActiveView();
   };
 }
@@ -3494,8 +3492,7 @@ function acEstConfig() {
   let c = null;
   try { c = JSON.parse(localStorage.getItem(AC_EST_KEY)); } catch { /* none saved */ }
   c = c || acEstMem || {};
-  return { on: !!c.on, basement: c.basement || '', dampersFixed: c.dampersFixed ?? '2026-06-01',
-           fromMonth: +c.fromMonth || 5, toMonth: +c.toMonth || 10 };   // months of the year the A/C can run (1-12, inclusive; wraps if from > to)
+  return { on: !!c.on, basement: c.basement || '', dampersFixed: c.dampersFixed ?? '2026-06-01' };
 }
 function acEstSave(cfg) {
   acEstMem = cfg;
@@ -3505,6 +3502,10 @@ function acEstBasementCol(cfg) {
   if (cfg.basement && weatherCols.includes(cfg.basement)) return cfg.basement;
   return weatherCols.find(c => /basement/i.test(c) && DEFAULT_SELECTED_RE.test(c)) || '';
 }
+// The Cooling Active periods from Configuration, when any are complete: the A/C can only be running inside them.
+// With none defined there is no calendar limit.
+function acEstCoolRanges() { return loadSeasonConfig().cool.filter(([f, t]) => f && t); }
+
 function acEstOutdoorCol() {
   const saved = loadThermalSensors();
   if (saved && weatherCols.includes(saved.outdoor)) return saved.outdoor;
@@ -3552,7 +3553,8 @@ function acEstimate(cfg) {
   const kwh = e && e.cols.get(GB_ENERGY_COL);
   if (!kwh || !w || !e.n) return null;
   const outCol = acEstOutdoorCol(), basCol = acEstBasementCol(cfg), trkCol = acEstTrunkCol();
-  const key = [e, w, outCol, basCol, trkCol, cfg.dampersFixed, cfg.fromMonth, cfg.toMonth];
+  const coolRanges = acEstCoolRanges();
+  const key = [e, w, outCol, basCol, trkCol, cfg.dampersFixed, JSON.stringify(coolRanges)];
   if (acEstCache && acEstCache.key.every((k, i) => k === key[i])) return acEstCache.est;
 
   const M = AC_EST_MODEL, n = e.n, STEP = 900000;
@@ -3560,7 +3562,7 @@ function acEstimate(cfg) {
   // weather rows that carry a probe reading, for the probe's own idle level
   const trkRows = []; if (trk) for (let k = 0; k < w.n; k++) if (trk[k] === trk[k]) trkRows.push(k);
   let tlo = 0, thi = 0;
-  const inSeason = m => cfg.fromMonth <= cfg.toMonth ? m >= cfg.fromMonth && m <= cfg.toMonth : m >= cfg.fromMonth || m <= cfg.toMonth;
+  const inSeason = t => { if (!coolRanges.length) return true; const d = toLocalDate(new Date(t)); return coolRanges.some(([f, to]) => d >= f && d <= to); };
   const fixMs = cfg.dampersFixed ? new Date(cfg.dampersFixed + 'T00:00:00').getTime() : -Infinity;
 
   // Zero-load runs of two or more intervals are outages (and the meter is
@@ -3608,7 +3610,7 @@ function acEstimate(cfg) {
     if (out) for (let k = wlo; k < whi; k++) { const v = out[k]; if (v === v) { so += v; no++; } }
     if (no && !dz[i]) l += M.outWeight * M.outLlr[acBin(M.outEdges, so / no)];
     if (no && so / no < M.coldGateF) l = -12;
-    if (!inSeason(new Date(t).getMonth() + 1)) l = -12;     // outside the months the A/C can run (set in Configuration)
+    if (!inSeason(t)) l = -12;     // outside every Cooling Active period (Configuration): the A/C can't be the cause
     llrM[i] = l;
     llrF[i] = l;
 
@@ -3761,11 +3763,6 @@ function renderAcEstConfig() {
   const cb = document.getElementById('ac-est-on'), sel = document.getElementById('ac-est-basement'),
         dt = document.getElementById('ac-est-fixed');
   cb.checked = cfg.on;
-  const fromSel = document.getElementById('ac-est-from'), toSel = document.getElementById('ac-est-to');
-  if (!fromSel.options.length) for (const sel2 of [fromSel, toSel]) for (let m = 1; m <= 12; m++) {
-    const o = document.createElement('option'); o.value = m; o.textContent = new Date(2000, m - 1, 1).toLocaleString(undefined, { month: 'long' }); sel2.appendChild(o);
-  }
-  fromSel.value = cfg.fromMonth; toSel.value = cfg.toMonth;
   sel.innerHTML = '<option value="">— none (meter only) —</option>';
   for (const c of weatherCols) if (DEFAULT_SELECTED_RE.test(c)) {
     const o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o);
@@ -3773,10 +3770,10 @@ function renderAcEstConfig() {
   sel.value = acEstBasementCol(cfg);
   dt.value = cfg.dampersFixed;
   const apply = () => {
-    acEstSave({ on: cb.checked, basement: sel.value, dampersFixed: dt.value, fromMonth: +fromSel.value, toMonth: +toSel.value });
+    acEstSave({ on: cb.checked, basement: sel.value, dampersFixed: dt.value });
     rebuildDataset({ keepView: true });
   };
-  cb.onchange = sel.onchange = dt.onchange = fromSel.onchange = toSel.onchange = apply;
+  cb.onchange = sel.onchange = dt.onchange = apply;
 }
 // ══ EXPERIMENTAL: A/C run estimate from the electricity feed (end) ═══════════
 
