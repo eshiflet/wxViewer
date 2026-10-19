@@ -838,7 +838,7 @@
               <div class="season-group">
                 <div class="season-group-title hvac">🔧 Basement dampers fixed on</div>
                 <input type="date" class="sensor-select" id="ac-est-fixed">
-                <div class="sensor-hint">The basement trend is used only before this date; after it the basement no longer reacts. Clear it to ignore the basement.</div>
+                <div class="sensor-hint">Before this date the basement chills fast whenever the compressor runs; after it the response is weaker, so a gentler calibration is used. Clear it if the dampers were never stuck.</div>
               </div>
               </div>
             </div>
@@ -3462,16 +3462,18 @@ const AC_EST_MODEL = {
   // Rows: kW over idle; columns: how much the load moves across three intervals (a compressor
   // plateaus, a washer or dryer jumps about).
   rngEdges:   [0.5, 1.0, 2.0],
-  kwLlr2d:    [[-2.834, 0.97, 2.092, 1.329], [-1.908, 1.983, 1.329, 1.329], [-0.353, 1.64, 0.106, -0.28], [0.116, 1.329, 2.939, 0.231], [1.129, 2.592, 1.84, -0.616], [1.765, 3.21, 2.939, -0.616], [1.781, 2.701, 3.175, 2.428], [4.826, 2.994, 1.965, 1.329], [6.447, 3.727, 2.177, 0.819], [6.32, 4.94, 2.629, -0.616], [4.274, 2.428, 2.428, -0.868], [4.274, 3.275, 1.84, 1.329], [3.527, 3.727, 1.84, 0.819], [1.329, 1.329, 0.482, 1.329], [2.428, 1.329, 0.482, 0.374], [1.329, 1.329, 1.329, -0.616]],
-  dryerKw:    3.2,       // this far over idle is a dryer's heating element (A/C alone tops out near 2.9 kW): the load says nothing
+  kwLlr2d:    [[-2.786, 0.952, 1.718, -0.0], [-1.858, 1.781, 0.852, -0.0], [-0.331, 1.403, -0.009, -0.607], [0.083, 1.186, 1.459, -0.349], [0.901, 2.416, 1.11, -0.812], [1.526, 2.907, 1.459, -0.812], [1.413, 2.548, 2.415, 0.975], [3.311, 2.613, 1.671, 0.626], [4.927, 2.962, 1.435, 0.368], [4.8, 3.425, 1.876, -0.812], [2.764, 0.975, 1.68, -0.982], [2.764, 1.784, 1.11, -0.0], [2.029, 2.225, 1.11, 0.368], [-0.0, -0.0, 0.163, 0.626], [0.975, -0.0, 0.163, 0.205], [-0.0, -0.0, -0.0, -0.812]],
+  dryerKw:    3.2,       // this far over idle is a dryer's heating element (A/C alone tops out near 2.9 kW)
+  dryerZone:  3,         // ...and the load within this many intervals either side says nothing about the compressor: only temperatures decide there
   clampLlr:   5,
   // A duct-probe reading is a measurement and decides; the meter only nudges.
   trunkWeight: 12, meterWeightWithTrunk: 0.3, trunkDropF: 5, trunkIdleHalfH: 6, trunkIdleQ: 0.85,
   outEdges:   [40, 50, 60, 70, 80, 90],                                                            // outdoor °F
-  outLlr:     [-3.025, -5.023, -0.84, -0.543, 1.1, 2.989, 1.369],
+  outLlr:     [-3.26, -5.235, -0.839, -0.54, 1.101, 2.938, 0.0],
   outWeight:  0.7,
   slopeEdges: [-0.6, -0.35, -0.15, 0.0, 0.15, 0.3],                                                // basement °F/hour
-  slopeLlr:   [3.0, 2.501, 0.474, -1.562, -3.0, -3.0, -3.0],
+  slopeLlr:   [3.0, 2.473, 0.465, -1.602, -3.0, -3.0, -3.0],       // dampers stuck open: a strong, fast drop
+  slopePostLlr: [0.0, 3.0, 2.281, 0.594, -1.15, -1.508, -1.262],  // after the repair: weaker, fitted on probe-labelled intervals
   slopeWeight: 0.8,
   stay:       0.8,       // chance the state carries over to the next 15 minutes
   idleHalf:   24,        // intervals either side for the idle-load reference
@@ -3569,18 +3571,25 @@ function acEstimate(cfg) {
   const slopeUsed = new Uint8Array(n), trunkUsed = new Uint8Array(n);
   const llrM = new Float64Array(n), llrF = new Float64Array(n);
   const wn = w.n; let wlo = 0, whi = 0, slo = 0, shi = 0;
+  // idle reference: low percentile of the surrounding usable loads
+  const over = new Float64Array(n).fill(NaN);
   for (let u = 0; u < U.length; u++) {
-    const i = U[u], t = e.ts[i], kw = kwh[i] * 4;
-    // idle reference: low percentile of the surrounding usable loads
     const win = [];
     for (let k = Math.max(0, u - M.idleHalf); k <= Math.min(U.length - 1, u + M.idleHalf); k++) win.push(kwh[U[k]] * 4);
     win.sort((x, y) => x - y);
-    const idle = win[Math.floor(win.length * M.idleQ)];
+    over[U[u]] = kwh[U[u]] * 4 - win[Math.floor(win.length * M.idleQ)];
+  }
+  // appliance-affected stretches: around any dryer-sized load, the meter can't speak for the compressor
+  const dz = new Uint8Array(n);
+  for (const i of U) if (over[i] >= M.dryerKw)
+    for (let k = -M.dryerZone; k <= M.dryerZone; k++) { const j = i + k; if (j >= 0 && j < n && Math.abs(e.ts[j] - e.ts[i]) <= M.dryerZone * STEP) dz[j] = 1; }
+  for (let u = 0; u < U.length; u++) {
+    const i = U[u], t = e.ts[i], kw = kwh[i] * 4;
+    const idle = kw - over[i];
     // how much the load moves across this and the two neighbouring intervals
     const pv = i > 0 && e.ts[i] - e.ts[i - 1] === STEP ? kwh[i - 1] * 4 : NaN, nx = i + 1 < n && e.ts[i + 1] - e.ts[i] === STEP ? kwh[i + 1] * 4 : NaN;
     const rng = pv === pv && nx === nx ? Math.max(pv, kw, nx) - Math.min(pv, kw, nx) : 0.75;
-    let l = kw - idle >= M.dryerKw ? 0
-          : Math.max(-M.clampLlr, Math.min(M.clampLlr, M.kwLlr2d[acBin(M.kwEdges, kw - idle)][acBin(M.rngEdges, rng)]));
+    let l = dz[i] ? 0 : Math.max(-M.clampLlr, Math.min(M.clampLlr, M.kwLlr2d[acBin(M.kwEdges, kw - idle)][acBin(M.rngEdges, rng)]));
 
     // mean outdoor over this interval
     while (wlo < wn && w.ts[wlo] < t) wlo++;
@@ -3588,7 +3597,7 @@ function acEstimate(cfg) {
     while (whi < wn && w.ts[whi] < t + STEP) whi++;
     let so = 0, no = 0;
     if (out) for (let k = wlo; k < whi; k++) { const v = out[k]; if (v === v) { so += v; no++; } }
-    if (no) l += M.outWeight * M.outLlr[acBin(M.outEdges, so / no)];
+    if (no && !dz[i]) l += M.outWeight * M.outLlr[acBin(M.outEdges, so / no)];
     llrM[i] = l;
     llrF[i] = l;
 
@@ -3612,8 +3621,8 @@ function acEstimate(cfg) {
       }
     }
 
-    // basement trend over t-30..t+45 min, only while the dampers were stuck
-    if (bas && t < fixMs) {
+    // basement trend over t-30..t+45 min; the calibration depends on whether the dampers were stuck open
+    if (bas) {
       while (slo < wn && w.ts[slo] < t - 1800000) slo++;
       if (shi < slo) shi = slo;
       while (shi < wn && w.ts[shi] <= t + 2700000) shi++;
@@ -3622,7 +3631,7 @@ function acEstimate(cfg) {
       if (n2 >= 8 && hi - lo < 15) {
         const mx = sx / n2, my = sy / n2; let sxy = 0, sxx = 0;
         for (let k = slo; k < shi; k++) { const v = bas[k]; if (v === v) { const dx = (w.ts[k] - t) / 3600000 - mx; sxy += dx * (v - my); sxx += dx * dx; } }
-        if (sxx > 0) { llrF[i] += M.slopeWeight * M.slopeLlr[acBin(M.slopeEdges, sxy / sxx)]; slopeUsed[i] = 1; }
+        if (sxx > 0) { llrF[i] += M.slopeWeight * (t < fixMs ? M.slopeLlr : M.slopePostLlr)[acBin(M.slopeEdges, sxy / sxx)]; slopeUsed[i] = 1; }
       }
     }
   }
@@ -3720,7 +3729,7 @@ function renderAcEstCard(summaryEl, info, est) {
   const s = info.stats, tot = s.coolHours + s.passiveHours;
   li.push(`<li><b>${s.coolHours} cooling</b> and <b>${s.passiveHours} passive</b> hours were <b>estimated</b> from the electricity feed in this range (hours with a duct-probe reading keep the measured state)</li>`);
   if (est.basCol && s.withBasement)
-    li.push(`<li>${s.withBasement} of them also had basement-trend evidence (${stripUnit(est.basCol)}, used until ${est.dampersFixed || 'never'}); it <b>changed the call</b> for ${s.changedByBasement}</li>`);
+    li.push(`<li>${s.withBasement} of them also had basement-trend evidence (${stripUnit(est.basCol)}, dampers fixed ${est.dampersFixed || 'never'}); it <b>changed the call</b> for ${s.changedByBasement}</li>`);
   else
     li.push(`<li>No basement-trend evidence in this range${est.basCol ? '' : ' (no basement sensor chosen)'} — meter load alone decided</li>`);
   li.push(`<li>Other hours (cool outdoors, or unclear) are left to the season ranges / RANSAC as before</li>`);
