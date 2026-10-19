@@ -2257,10 +2257,11 @@ function renderChart() {
     }
   }
 
-  // EXPERIMENTAL A/C estimate: background shading, drawn first so the lines sit on top
+  // EXPERIMENTAL A/C estimate: background shading (layout shapes, below the lines)
+  let acShade = null;
   if (checkedCols.has(AC_EST_COL)) {
-    const shade = acEstShadeTrace(filtered, view, bins.detail);
-    if (shade) traces.unshift(shade);
+    acShade = acEstShade(filtered, view, bins.detail);
+    if (acShade) traces.push(acShade.hover);
   }
 
   // Update anomaly badge
@@ -2312,6 +2313,7 @@ function renderChart() {
       ...energyTickFormat,
     } } : {}),
     // EXPERIMENTAL A/C estimate shading lives on its own hidden 0–1 axis
+    ...(acShade ? { shapes: acShade.shapes } : {}),
     ...(checkedCols.has(AC_EST_COL) ? { yaxis3: { overlaying: 'y', range: [0, 1], visible: false, fixedrange: true } } : {}),
     hovermode: 'x unified',
     hoverlabel: { bgcolor: PLOT_PANEL, bordercolor: PLOT_GRID, font: { color: PLOT_TEXT, size: 11 } },
@@ -3461,7 +3463,7 @@ function hvacRuns(detected) {
 // experiment, delete everything between this banner and the matching "(end)"
 // banner, plus the `acEstSync()` call in rebuildDataset(), the `acEst…` hooks
 // in renderThermal()/renderThermalSummaryCards()/renderThermalMonthlyChart()/
-// setThermalSensors()/renderSensorConfig(), the AC_EST_COL / acEstShadeTrace hooks
+// setThermalSensors()/renderSensorConfig(), the AC_EST_COL / acEstShade hooks
 // in renderChart(), and the #ac-est-group markup.
 //
 // The tables below were fitted offline: the meter table on intervals where the
@@ -3719,11 +3721,14 @@ function acEstSync() {
   energyCols = [...energyCols, AC_EST_COL];
 }
 
-// The probability as a light wash behind the chart: a one-row heatmap on its own
-// hidden 0–1 axis, transparent at 0 and strongest at 1. Averaged into roughly
-// one cell per pixel of the window on screen; cells with no estimate stay clear.
-const AC_EST_SHADE_RGB = '56,189,248', AC_EST_SHADE_MAX_ALPHA = 0.28;
-function acEstShadeTrace(rows, view, cells) {
+// The probability as a light wash behind the chart: a rectangle per stretch of equal
+// shade, spanning the plot's full height, drawn below the lines. Shapes belong to the
+// plot, so — unlike a trace — the range slider underneath never picks them up.
+// Averaged into roughly one cell per pixel of the window on screen and snapped to ten
+// shade levels, then runs of equal level are merged; cells with no estimate stay clear.
+// A transparent line on its own hidden 0–1 axis carries the value for the hover readout.
+const AC_EST_SHADE_RGB = '56,189,248', AC_EST_SHADE_MAX_ALPHA = 0.28, AC_EST_SHADE_LEVELS = 10;
+function acEstShade(rows, view, cells) {
   const ts = tsOf(rows), p = valsOf(rows, AC_EST_COL);
   const t0 = view[0], t1 = view[1];
   if (!(t1 > t0)) return null;
@@ -3737,13 +3742,26 @@ function acEstShadeTrace(rows, view, cells) {
     const v = p[i]; if (v !== v || ts[i] < g0 || ts[i] >= t1) continue;
     const k = Math.floor((ts[i] - g0) / w); sum[k] += v; cnt[k]++;
   }
-  const x = [], z = [];
-  for (let k = 0; k < n; k++) { x.push(new Date(g0 + (k + 0.5) * w)); z.push(cnt[k] ? sum[k] / cnt[k] : null); }
+  const x = [], y = [], shapes = [];
+  let runLevel = 0, runStart = 0;
+  const close = end => {
+    if (runLevel > 0) shapes.push({
+      type: 'rect', xref: 'x', yref: 'paper', x0: new Date(g0 + runStart * w), x1: new Date(g0 + end * w), y0: 0, y1: 1,
+      fillcolor: `rgba(${AC_EST_SHADE_RGB},${(AC_EST_SHADE_MAX_ALPHA * runLevel / AC_EST_SHADE_LEVELS).toFixed(3)})`,
+      line: { width: 0 }, layer: 'below',
+    });
+  };
+  for (let k = 0; k < n; k++) {
+    const m = cnt[k] ? sum[k] / cnt[k] : NaN;
+    x.push(new Date(g0 + (k + 0.5) * w)); y.push(m === m ? m : null);
+    const level = m === m ? Math.round(m * AC_EST_SHADE_LEVELS) : 0;
+    if (level !== runLevel) { close(k); runLevel = level; runStart = k; }
+  }
+  close(n);
   return {
-    type: 'heatmap', x, y: [0.5], z: [z], yaxis: 'y3',
-    zmin: 0, zmax: 1, zsmooth: false, showscale: false, hoverongaps: false,
-    colorscale: [[0, `rgba(${AC_EST_SHADE_RGB},0)`], [1, `rgba(${AC_EST_SHADE_RGB},${AC_EST_SHADE_MAX_ALPHA})`]],
-    name: 'A/C probability (est.)', hovertemplate: '%{z:.2f}',
+    shapes,
+    hover: { type: 'scatter', mode: 'lines', x, y, yaxis: 'y3', connectgaps: false,
+             line: { color: 'rgba(0,0,0,0)', width: 0 }, name: 'A/C probability (est.)', hovertemplate: '%{y:.2f}' },
   };
 }
 
